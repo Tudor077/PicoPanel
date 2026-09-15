@@ -2620,6 +2620,74 @@ void printHelp() {
   Serial.println(F("    ? = this help"));
 }
 
+/* --------------------------------------------------------------------------
+   SCREEN MIRROR - the OLED, live, in the PC app.
+
+   The panel usually sits where you can't comfortably look at it: behind a
+   wheel, under a desk, inside a rig. So the PC app can show exactly what the
+   128x32 panel shows, scaled up.
+
+   What goes over the wire is the frame buffer itself, not a description of it.
+   A "mimic" that redrew the pages on the PC would be a second implementation of
+   every screen, and the two would drift apart the first time one of them
+   changed. This can't drift: it's the same bytes the SSD1306 is given.
+
+   One line per frame, base64 so it stays printable and can't be confused with
+   the telemetry lines going the other way:
+
+     !FB 128 32 <684 characters>
+
+   512 bytes per frame, 684 once encoded. At the default 5 frames a second
+   that's ~3.5 KB/s - nothing for USB CDC, where the baud rate is a fiction
+   anyway. It stays off until the PC asks for it with 'o'.
+
+   The buffer is read while core1 may be drawing into it. That's deliberate: a
+   torn frame costs nothing here (the next one is along in 200 ms) and taking
+   the bus lock would make the mirror wait for a 15 ms I2C transfer.
+   -------------------------------------------------------------------------- */
+bool     mirrorOn = false;
+uint16_t mirrorMs = 200;              // 5 frames a second
+
+static const char B64[] =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Three bytes in, four characters out, straight onto Serial - no buffer of our
+// own, because 684 characters of it would be a lot of RAM to hold for nothing.
+static void b64Emit(const uint8_t *data, size_t n) {
+  for (size_t i = 0; i < n; i += 3) {
+    uint32_t v = (uint32_t)data[i] << 16;
+    if (i + 1 < n) v |= (uint32_t)data[i + 1] << 8;
+    if (i + 2 < n) v |= data[i + 2];
+    Serial.write(B64[(v >> 18) & 63]);
+    Serial.write(B64[(v >> 12) & 63]);
+    Serial.write(i + 1 < n ? B64[(v >> 6) & 63] : '=');
+    Serial.write(i + 2 < n ? B64[v & 63] : '=');
+  }
+}
+
+void mirrorService() {
+  static uint32_t tNext = 0;
+  if (!mirrorOn || !oledOK || !oled) return;
+  uint32_t now = millis();
+  if ((int32_t)(now - tNext) < 0) return;
+  tNext = now + mirrorMs;
+
+  // A sleeping panel is black, and that's what the mirror should show - the
+  // buffer still holds the last frame, so we send a blank one on purpose.
+  Serial.print(F("!FB "));
+  Serial.print(SCREEN_W);
+  Serial.print(' ');
+  Serial.print(oledH);
+  Serial.print(' ');
+  size_t n = (size_t)SCREEN_W * oledH / 8;
+  if (oledSleep == 2) {
+    for (size_t i = 0; i < (n + 2) / 3 * 4; i++) Serial.write('A');   // all zeroes
+  } else {
+    b64Emit(oled->getBuffer(), n);
+  }
+  Serial.println();
+}
+
 void handleSerial() {
   // Telemetry lines start with '$' and are gathered to the end of the line. The
   // rest of the console stays on SINGLE-character commands, as before.
@@ -2784,74 +2852,6 @@ void handleSerial() {
       default: break;                        // ignore \r, \n and anything else
     }
   }
-}
-
-/* --------------------------------------------------------------------------
-   SCREEN MIRROR - the OLED, live, in the PC app.
-
-   The panel usually sits where you can't comfortably look at it: behind a
-   wheel, under a desk, inside a rig. So the PC app can show exactly what the
-   128x32 panel shows, scaled up.
-
-   What goes over the wire is the frame buffer itself, not a description of it.
-   A "mimic" that redrew the pages on the PC would be a second implementation of
-   every screen, and the two would drift apart the first time one of them
-   changed. This can't drift: it's the same bytes the SSD1306 is given.
-
-   One line per frame, base64 so it stays printable and can't be confused with
-   the telemetry lines going the other way:
-
-     !FB 128 32 <684 characters>
-
-   512 bytes per frame, 684 once encoded. At the default 5 frames a second
-   that's ~3.5 KB/s - nothing for USB CDC, where the baud rate is a fiction
-   anyway. It stays off until the PC asks for it with 'o'.
-
-   The buffer is read while core1 may be drawing into it. That's deliberate: a
-   torn frame costs nothing here (the next one is along in 200 ms) and taking
-   the bus lock would make the mirror wait for a 15 ms I2C transfer.
-   -------------------------------------------------------------------------- */
-bool     mirrorOn = false;
-uint16_t mirrorMs = 200;              // 5 frames a second
-
-static const char B64[] =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-// Three bytes in, four characters out, straight onto Serial - no buffer of our
-// own, because 684 characters of it would be a lot of RAM to hold for nothing.
-static void b64Emit(const uint8_t *data, size_t n) {
-  for (size_t i = 0; i < n; i += 3) {
-    uint32_t v = (uint32_t)data[i] << 16;
-    if (i + 1 < n) v |= (uint32_t)data[i + 1] << 8;
-    if (i + 2 < n) v |= data[i + 2];
-    Serial.write(B64[(v >> 18) & 63]);
-    Serial.write(B64[(v >> 12) & 63]);
-    Serial.write(i + 1 < n ? B64[(v >> 6) & 63] : '=');
-    Serial.write(i + 2 < n ? B64[v & 63] : '=');
-  }
-}
-
-void mirrorService() {
-  static uint32_t tNext = 0;
-  if (!mirrorOn || !oledOK || !oled) return;
-  uint32_t now = millis();
-  if ((int32_t)(now - tNext) < 0) return;
-  tNext = now + mirrorMs;
-
-  // A sleeping panel is black, and that's what the mirror should show - the
-  // buffer still holds the last frame, so we send a blank one on purpose.
-  Serial.print(F("!FB "));
-  Serial.print(SCREEN_W);
-  Serial.print(' ');
-  Serial.print(oledH);
-  Serial.print(' ');
-  size_t n = (size_t)SCREEN_W * oledH / 8;
-  if (oledSleep == 2) {
-    for (size_t i = 0; i < (n + 2) / 3 * 4; i++) Serial.write('A');   // all zeroes
-  } else {
-    b64Emit(oled->getBuffer(), n);
-  }
-  Serial.println();
 }
 
 void serialReport() {
