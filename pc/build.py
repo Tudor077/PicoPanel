@@ -25,8 +25,8 @@ OUT = os.path.join(ROOT, NAME + ".exe")
 
 
 def make_icon(path):
-    """Aceeasi iconita ca in tray, desenata mai mare ca sa arate bine si in
-    Explorer, unde Windows o cere la 256 px."""
+    """The same icon as in the tray, drawn larger so it also looks right in
+    Explorer, where Windows asks for it at 256 px."""
     from PIL import Image, ImageDraw
 
     img = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
@@ -51,15 +51,15 @@ def main():
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean",
         "--onefile",
-        "--windowed",                 # fara consola: e aplicatie de tray
+        "--windowed",                 # no console: it's a tray app
         "--name", NAME,
         "--icon", icon,
         "--workpath", os.path.join(tmp, "work"),
         "--distpath", os.path.join(tmp, "dist"),
         "--specpath", tmp,
-        # Importuri pe care analiza statica nu le vede: win32com.client e
-        # incarcat abia in autostart.enable(), iar backend-ul serial pentru
-        # Windows se alege la rulare, dupa numele platformei.
+        # Imports static analysis can't see: win32com.client is only loaded
+        # inside autostart.enable(), and the Windows serial backend is picked
+        # at runtime from the platform name.
         "--hidden-import", "win32com.client",
         "--hidden-import", "serial.tools.list_ports",
         "--hidden-import", "serial.serialwin32",
@@ -68,7 +68,7 @@ def main():
     print(" ".join(cmd), "\n")
     r = subprocess.run(cmd)
     if r.returncode != 0:
-        sys.exit("PyInstaller a esuat")
+        sys.exit("PyInstaller failed")
 
     built = os.path.join(tmp, "dist", NAME + ".exe")
     shutil.copy2(built, OUT)

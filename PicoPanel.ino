@@ -5,8 +5,8 @@
    not guessed. Change the schematic and you regenerate the netlist and update
    this block to match.
 
-     U1  RaspberryPi_Pico footprint (placa reala = YD-RP2040)
-     J1  ER_OLEDM0.91_1x-I2C  -> OLED SSD1306 128x32, adresa 0x3C
+     U1  RaspberryPi_Pico footprint (the real board = YD-RP2040)
+     J1  ER_OLEDM0.91_1x-I2C  -> OLED SSD1306 128x32, address 0x3C
      J2  Conn_01x04           -> 3V3 / GND / SDA / SCL (I2C brought out)
          The 8-button PCF8574 expander goes here. It isn't in the schematic;
          it's found by itself on 0x20..0x27 and is optional - everything works
