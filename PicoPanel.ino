@@ -1,9 +1,8 @@
 /* ============================================================================
    PicoPanel - test / diagnostic firmware for the "Panou" board (YD-RP2040)
    ----------------------------------------------------------------------------
-   The pinout below is taken STRAIGHT from Panou.kicad_sch (the KiCad netlist),
-   not guessed. Change the schematic and you regenerate the netlist and update
-   this block to match.
+   The pinout below matches the board as it is actually wired. Change the
+   wiring and this block has to change with it.
 
      U1  RaspberryPi_Pico footprint (the real board = YD-RP2040)
      J1  ER_OLEDM0.91_1x-I2C  -> OLED SSD1306 128x32, address 0x3C
@@ -14,8 +13,8 @@
      J3  Conn_01x08           -> external buttons: SET MID RHT LFT DWN UP + GND
      SW1 RotaryEncoder_Switch -> A / B / push (C and S2 to GND)
          Alps EC11, 20 detents per turn, 2 quarter-steps per detent.
-         FILTER ADDED ON THE BOARD, not yet in Panou.kicad_sch: on each of A
-         and B, a 1 kOhm pull-up to 3V3 plus 100 nF to ground (tau = 100 us).
+         FILTER ADDED ON THE BOARD: on each of A and B, a 1 kOhm pull-up to
+         3V3 plus 100 nF to ground (tau = 100 us).
          Switch S1 has no filter and doesn't need one - it's debounced in
          software.
      SW2 SW_SP3T  (4 pins)    -> 1P3T slide switch
@@ -29,12 +28,12 @@
                                              GPIO27 MID
      GPIO25 onboard blue LED                 GPIO28 SET
 
-   CHANGE FROM THE ORIGINAL SCHEMATIC: the RST label (J3 pin 1 -> U1 pin 33 =
-   AGND) was deleted from Panou.kicad_sch. It was wrong (AGND is not reset) and
-   unused anyway. J3 pin 1 is left free.
+   CHANGE FROM THE ORIGINAL WIRING: the RST line (J3 pin 1 -> U1 pin 33 =
+   AGND) is gone. It was wrong (AGND is not reset) and unused anyway. J3 pin 1
+   is left free.
 
    HOW SW2 AND SW3 ARE READ
-   In the schematic, EVERY switch pin goes to a GPIO - none is tied to ground,
+   EVERY switch pin goes to a GPIO - none is tied to ground,
    so they can't be read like ordinary DIP switches. The firmware scans them as
    a matrix instead: one pin at a time is driven OUTPUT LOW while the rest are
    read with internal pull-ups. The pins that fall LOW are the ones the wiper
@@ -43,10 +42,10 @@
    The common pin is found by INTERSECTION, not by statistics: it is the one pin
    present in the shorted pair whatever the position, so once the switch has
    been through two different positions exactly one candidate is left, for good.
-   Until then we go with the schematic's convention (pin 1 = common) and correct
+   Until then we go with the obvious convention (pin 1 = common) and correct
    ourselves.
 
-   The number of positions comes from the schematic: SW2 = SW_SP3T -> 3,
+   The number of positions is a property of the switch: SW2 = SW_SP3T -> 3,
    SW3 = SW_DP5T -> 5 (the 'expect' field). The display shows "2/3", the current
    position out of the total, and the 'v' next to it counts how many distinct
    positions have been seen so far. A '?' after the common pin number means it
@@ -116,8 +115,8 @@
 // The schematic uses none of them as an input, so there's no conflict.
 #define PIN_STATUS_LED 25
 
-// The onboard USER button, next to BOOT. It isn't in Panou.kicad_sch because
-// it isn't the panel's - it belongs to the YD-RP2040 board. We use it to change
+// The onboard USER button, next to BOOT. It isn't part of the panel's own
+// wiring - it belongs to the YD-RP2040 board. We use it to change
 // the page on screen, which leaves EVERY panel input free for the PC.
 #define PIN_USR_KEY    24
 
@@ -347,7 +346,7 @@ struct SwGroup {
   const char    *name;
   const uint8_t *pins;
   uint8_t        n;                  // how many pins the group has
-  uint8_t        expect;             // how many positions it has, from the schematic
+  uint8_t        expect;             // how many positions the switch has
   uint8_t        reverse;            // 1 = number the positions the other way
   uint8_t        row[SW_MAX_PINS];   // row[i] = mask of the pins shorted to i
   uint8_t        candMask;           // pins that could still be the common one
@@ -361,10 +360,10 @@ struct SwGroup {
   uint32_t       changes;
 };
 
-// 'expect' comes from the schematic symbols: SW2 = SW_SP3T (3 positions),
+// 'expect' comes from the switches themselves: SW2 = SW_SP3T (3 positions),
 // SW3 = SW_DP5T (5 positions, with the two poles wired in parallel).
 // candMask starts with every pin marked as a possible common.
-// SW2 is mounted the other way round from the pin order in the schematic, so its
+// SW2 is mounted the other way round from its pin order, so its
 // numbering is flipped: position 1 becomes 3, 3 becomes 1, 2 stays put. Set
 // reverse to 0 if you change the switch's orientation on the board.
 SwGroup sw2 = { "SW2", SW2_PINS, 4, 3, 1, {0}, 0x0F, 0, 0, -1, -1, 0, 0, 0, 0 };
@@ -651,7 +650,7 @@ void swScan(SwGroup &g) {
   uint8_t nCand = 0;
   for (uint8_t i = 0; i < g.n; i++)
     if (g.candMask & (1u << i)) { nCand++; if (com < 0) com = (int8_t)i; }
-  // While several candidates remain we follow the schematic's convention, where
+  // While several candidates remain we follow the obvious convention, where
   // pin 1 is the common. It corrects itself on the first change of position.
   if (nCand > 1 && (g.candMask & 0x01)) com = 0;
 
@@ -1108,10 +1107,10 @@ static inline bool pcfHeld(uint8_t i)    { return pcfOK && pcfBtn[i].level; }
      ENC_CLICK         the encoder's own button
      UP..SET           the panel d-pad, if you fit it (NOTHING by default)
 
-   MIND THE NAMES: in Panou.kicad_sch the switches are called SW2 and SW3, and
-   in the code the objects are sw2 and sw3. The tables here use YOUR names:
-     mapSw1[3] = the 3-position switch = object sw2 in code = SW2 in the schematic
-     mapSw2[5] = the 5-position switch = object sw3 in code = SW3 in the schematic
+   MIND THE NAMES: on the board the switches are labelled SW2 and SW3, and in
+   the code the objects are sw2 and sw3. The tables here use YOUR names:
+     mapSw1[3] = the 3-position switch = object sw2 in code = SW2 on the board
+     mapSw2[5] = the 5-position switch = object sw3 in code = SW3 on the board
 
    WHAT YOU CAN PUT IN A SLOT:
      NOTHING                      sends nothing
@@ -2125,6 +2124,117 @@ void drawGame() {
   oled->setTextSize(1);            // don't leave size 2 behind us
 }
 
+/* --------------------------------------------------------------------------
+   SCREEN MIRROR - the OLED, live, in the PC app.
+
+   The panel usually sits where you can't comfortably look at it: behind a
+   wheel, under a desk, inside a rig. So the PC app can show exactly what the
+   128x32 panel shows, scaled up.
+
+   What goes over the wire is the frame buffer itself, not a description of it.
+   A "mimic" that redrew the pages on the PC would be a second implementation of
+   every screen, and the two would drift apart the first time one of them
+   changed. This can't drift: it's the same bytes the SSD1306 is given.
+
+   One line per frame, base64 so it stays printable and can't be confused with
+   the telemetry lines going the other way:
+
+     !FB 128 32 <684 characters>
+
+   512 bytes per frame, 684 once encoded. At 20 frames a second that's ~14 KB/s
+   - nothing for USB CDC, where the baud rate is a fiction anyway. It stays off
+   until the PC asks for it with 'o'.
+
+   THE FRAME IS A SNAPSHOT, not the live buffer. The first version read straight
+   out of the OLED's buffer while core1 was drawing into it, and the result was
+   visible: catch it between clearDisplay() and the last drawPixel() and you
+   mirror a half-erased frame. It looked like glitching on the PC while the
+   panel itself was perfectly fine.
+
+   So core1 copies the finished frame here, right after it has pushed it to the
+   screen, and core0 sends that. The mutex is held only for the two 512-byte
+   copies (microseconds), never across the serial write - otherwise a slow host
+   would stall rendering.
+   -------------------------------------------------------------------------- */
+bool     mirrorOn = false;
+uint16_t mirrorMs = 50;               // 20 frames a second
+
+// The handover. Big enough for a 128x64 panel, so 'h' can't overflow it.
+static uint8_t mirrorSnap[SCREEN_W * 64 / 8];
+static size_t  mirrorSnapLen   = 0;
+static bool    mirrorSnapFresh = false;
+auto_init_mutex(mirrorMux);
+
+// Called from core1 with a frame it has just finished drawing.
+void mirrorCapture() {
+  if (!mirrorOn || !oled) return;
+  size_t n = (size_t)SCREEN_W * oledH / 8;
+  if (n > sizeof(mirrorSnap)) return;
+  mutex_enter_blocking(&mirrorMux);
+  memcpy(mirrorSnap, oled->getBuffer(), n);
+  mirrorSnapLen   = n;
+  mirrorSnapFresh = true;
+  mutex_exit(&mirrorMux);
+}
+
+static const char B64[] =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Three bytes in, four characters out, straight onto Serial - no buffer of our
+// own, because 684 characters of it would be a lot of RAM to hold for nothing.
+static void b64Emit(const uint8_t *data, size_t n) {
+  for (size_t i = 0; i < n; i += 3) {
+    uint32_t v = (uint32_t)data[i] << 16;
+    if (i + 1 < n) v |= (uint32_t)data[i + 1] << 8;
+    if (i + 2 < n) v |= data[i + 2];
+    Serial.write(B64[(v >> 18) & 63]);
+    Serial.write(B64[(v >> 12) & 63]);
+    Serial.write(i + 1 < n ? B64[(v >> 6) & 63] : '=');
+    Serial.write(i + 2 < n ? B64[v & 63] : '=');
+  }
+}
+
+void mirrorService() {
+  static uint32_t tNext = 0;
+  static uint8_t  frame[sizeof(mirrorSnap)];
+  if (!mirrorOn || !oledOK || !oled) return;
+  uint32_t now = millis();
+  if ((int32_t)(now - tNext) < 0) return;
+
+  size_t n = (size_t)SCREEN_W * oledH / 8;
+
+  // A dark panel is a dark mirror. render() returns early while the screen is
+  // off, so no snapshot is coming - we send a blank frame on purpose rather
+  // than leaving the last picture frozen on the PC.
+  bool blank = (oledSleep == 2);
+  if (!blank) {
+    mutex_enter_blocking(&mirrorMux);
+    bool have = mirrorSnapFresh;
+    if (have) {
+      n = mirrorSnapLen;
+      memcpy(frame, mirrorSnap, n);
+      mirrorSnapFresh = false;
+    }
+    mutex_exit(&mirrorMux);
+    // Nothing new drawn since the last frame we sent: say nothing. Repeating
+    // ourselves would only spend bandwidth to redraw an identical picture.
+    if (!have) return;
+  }
+  tNext = now + mirrorMs;
+
+  Serial.print(F("!FB "));
+  Serial.print(SCREEN_W);
+  Serial.print(' ');
+  Serial.print(oledH);
+  Serial.print(' ');
+  if (blank) {
+    for (size_t i = 0; i < (n + 2) / 3 * 4; i++) Serial.write('A');   // all zeroes
+  } else {
+    b64Emit(frame, n);
+  }
+  Serial.println();
+}
+
 void render() {
   I2C_GUARD;
   if (!oledOK || !oled) return;
@@ -2150,6 +2260,7 @@ void render() {
     case P_GAME:     drawGame();     break;
   }
   oled->display();
+  mirrorCapture();                   // hand core0 a frame that's actually done
   renderUs = micros() - t0;
   frames++;
 }
@@ -2583,7 +2694,7 @@ void printHelp() {
   Serial.println(F("    1 = force 0x3C   2 = force 0x3D   0 = auto-detect"));
   Serial.println(F("    h = toggle screen height 32 <-> 64"));
   Serial.println(F("    d = visual test (white / checkerboard / border)"));
-  Serial.println(F("    o = mirror the screen to the PC app (frame buffer, 5 fps)"));
+  Serial.println(F("    o = mirror the screen to the PC app (frame buffer, 20 fps)"));
   Serial.println(F("    v = raw SSD1306 commands, shows whether the panel ACKs"));
   Serial.println(F("  ENCODER"));
   Serial.println(F("    a = auto-calibrate (turn 6 clicks the same way)"));
@@ -2618,74 +2729,6 @@ void printHelp() {
   Serial.println(F("    car     : blk(1=left 2=right 3=hazards) tur(bar x10)"));
   Serial.println(F("    aircraft: kts vs aft hdg c1 c2 sqk ap"));
   Serial.println(F("    ? = this help"));
-}
-
-/* --------------------------------------------------------------------------
-   SCREEN MIRROR - the OLED, live, in the PC app.
-
-   The panel usually sits where you can't comfortably look at it: behind a
-   wheel, under a desk, inside a rig. So the PC app can show exactly what the
-   128x32 panel shows, scaled up.
-
-   What goes over the wire is the frame buffer itself, not a description of it.
-   A "mimic" that redrew the pages on the PC would be a second implementation of
-   every screen, and the two would drift apart the first time one of them
-   changed. This can't drift: it's the same bytes the SSD1306 is given.
-
-   One line per frame, base64 so it stays printable and can't be confused with
-   the telemetry lines going the other way:
-
-     !FB 128 32 <684 characters>
-
-   512 bytes per frame, 684 once encoded. At the default 5 frames a second
-   that's ~3.5 KB/s - nothing for USB CDC, where the baud rate is a fiction
-   anyway. It stays off until the PC asks for it with 'o'.
-
-   The buffer is read while core1 may be drawing into it. That's deliberate: a
-   torn frame costs nothing here (the next one is along in 200 ms) and taking
-   the bus lock would make the mirror wait for a 15 ms I2C transfer.
-   -------------------------------------------------------------------------- */
-bool     mirrorOn = false;
-uint16_t mirrorMs = 200;              // 5 frames a second
-
-static const char B64[] =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-// Three bytes in, four characters out, straight onto Serial - no buffer of our
-// own, because 684 characters of it would be a lot of RAM to hold for nothing.
-static void b64Emit(const uint8_t *data, size_t n) {
-  for (size_t i = 0; i < n; i += 3) {
-    uint32_t v = (uint32_t)data[i] << 16;
-    if (i + 1 < n) v |= (uint32_t)data[i + 1] << 8;
-    if (i + 2 < n) v |= data[i + 2];
-    Serial.write(B64[(v >> 18) & 63]);
-    Serial.write(B64[(v >> 12) & 63]);
-    Serial.write(i + 1 < n ? B64[(v >> 6) & 63] : '=');
-    Serial.write(i + 2 < n ? B64[v & 63] : '=');
-  }
-}
-
-void mirrorService() {
-  static uint32_t tNext = 0;
-  if (!mirrorOn || !oledOK || !oled) return;
-  uint32_t now = millis();
-  if ((int32_t)(now - tNext) < 0) return;
-  tNext = now + mirrorMs;
-
-  // A sleeping panel is black, and that's what the mirror should show - the
-  // buffer still holds the last frame, so we send a blank one on purpose.
-  Serial.print(F("!FB "));
-  Serial.print(SCREEN_W);
-  Serial.print(' ');
-  Serial.print(oledH);
-  Serial.print(' ');
-  size_t n = (size_t)SCREEN_W * oledH / 8;
-  if (oledSleep == 2) {
-    for (size_t i = 0; i < (n + 2) / 3 * 4; i++) Serial.write('A');   // all zeroes
-  } else {
-    b64Emit(oled->getBuffer(), n);
-  }
-  Serial.println();
 }
 
 void handleSerial() {
@@ -2926,7 +2969,7 @@ void setup() {
 
 #if defined(ARDUINO_ARCH_MBED)
   // Mbed core: Wire's pins are fixed in the variant (Pico = GPIO4/GPIO5), so
-  // there is no setSDA/setSCL. We only check they match the schematic.
+  // there is no setSDA/setSCL. We only check they match how it's wired.
   #if defined(PIN_WIRE_SDA) && defined(PIN_WIRE_SCL)
     #if (PIN_WIRE_SDA != PIN_SDA) || (PIN_WIRE_SCL != PIN_SCL)
       #error "The Mbed core's I2C pins aren't GPIO4/GPIO5. Switch to the Philhower core."

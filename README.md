@@ -19,11 +19,11 @@ playing.
 └─────────────────────────────────────────────────┘
 ```
 
-> **This is built for one specific panel — mine.** The pinout comes straight
-> out of `Panou.kicad_sch`, the switch positions and the encoder's behaviour are
-> measured on the hardware in front of me, and the firmware header documents
-> every assumption. If your board is wired differently, everything still works,
-> but you'll be editing the pin defines at the top of `PicoPanel.ino` first.
+> **This is built for one specific panel: mine.** The pin numbers, the switch
+> positions and the encoder's behaviour are all measured on the hardware in
+> front of me, and the firmware header documents every assumption. If your board
+> is wired differently everything still works, but you'll be editing the pin
+> defines at the top of `PicoPanel.ino` first.
 >
 > Questions about the panel, the build, or anything else around it:
 > **TikTok [@entity.077](https://www.tiktok.com/@entity.077)**.
@@ -45,7 +45,7 @@ Exactly what's on the board, and what each one does:
 | **OLED** | SSD1306 128x32 on I2C 0x3C | the pages below |
 
 Hold the **media layer** (double-tap USER) and A1-A4 become play/pause, next,
-previous and mute, while the encoder becomes volume — without spending a single
+previous and mute, while the encoder becomes volume, without spending a single
 gamepad button.
 
 Everything is in one table at the top of `PicoPanel.ino`, under
@@ -68,7 +68,7 @@ telemetry.
 The GAME page has its own sub-pages: speed, gear and a dithered rev bar with the
 learned redline marked; then fuel, temperature, turbo and rpm; then throttle,
 brake and the redline. A flight sim gets airspeed, vertical speed, altitude,
-COM frequencies, squawk and autopilot modes instead — the PC only has to say
+COM frequencies, squawk and autopilot modes instead. The PC only has to say
 `knd=air`.
 
 ## The PC app
@@ -80,13 +80,13 @@ python panel.py
 ```
 
 The board is found by USB VID, so it doesn't matter which COM port it landed on
-— and it gets found again by itself after every reflash. One window shows the
+- and it gets found again by itself after every reflash. One window shows the
 lamps for all eight buttons and the d-pad, both switch positions, the encoder,
 the page, the HID state and a raw log of everything the board says.
 
 **Mirror the OLED** ticks on the panel's own screen, live, scaled 4x in the
 window. The board sends the actual frame buffer, not a description of it, so
-what you see is what the panel shows, down to the pixel — there's no second
+what you see is what the panel shows, down to the pixel: there's no second
 implementation of the pages to drift out of step.
 
 Telemetry sources run in parallel and the freshest one wins, so you change games
@@ -99,11 +99,11 @@ without touching anything:
 | ETS2 | Euro / American Truck Sim | the SDK plugin plus its HTTP server |
 | MSFS | Flight Simulator | `pip install SimConnect` |
 | HTTP | anything of your own, Roblox included | POST JSON to `127.0.0.1:8099` |
-| Demo | none — a generator | tick **test generator** to see the screen move |
+| Demo | none, a generator | tick **test generator** to see the screen move |
 
 **Sharing OutGauge:** the protocol has exactly one listener, so PicoPanel and
 CorsaConnect used to lock each other out of UDP 4444. Tick **Leave OutGauge to
-CorsaConnect** and CorsaConnect keeps the port and sends a copy on 5051 —
+CorsaConnect** and CorsaConnect keeps the port and sends a copy on 5051 -
 which arrives better than the raw packet, with the learned redline, the slide
 and the crash impact already folded in.
 
@@ -121,7 +121,7 @@ There are **two** "Raspberry Pi Pico" entries in the board list. The one from
 builds and the diagnostics still run, but HID is missing entirely and the screen
 tells you so. HID needs Philhower.
 
-Close the PC app before flashing — the serial port is exclusive, and while
+Close the PC app before flashing: the serial port is exclusive, and while
 anything holds it, not even the 1200-baud reset into the bootloader gets
 through. The tray menu has **Release the port for 60s** for exactly this.
 
@@ -144,8 +144,8 @@ Two details worth knowing, because they're the kind of thing that eats an
 evening:
 
 **The switches have no common ground.** Every pin goes to a GPIO, so they can't
-be read like DIP switches. The firmware scans them as a matrix — one pin driven
-low at a time, the rest read with pull-ups — and works out which pin is the
+be read like DIP switches. The firmware scans them as a matrix: one pin driven
+low at a time, the rest read with pull-ups, and works out which pin is the
 common one by intersection: it's the only pin present in the shorted pair
 whatever the position, so after the switch has been through two positions
 exactly one candidate remains.

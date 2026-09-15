@@ -582,13 +582,17 @@ class App(tk.Tk):
 
     # -------------------------------------------------- loop
     def _pump(self):
+        # Frames are coalesced: at 20 a second several can pile up between two
+        # turns of this loop, and drawing the ones already superseded would cost
+        # 4 ms each to produce a picture nobody ever sees.
+        frame = None
         try:
             while True:
                 kind, payload = self.q.get_nowait()
                 if kind == "tel":
                     self._apply(payload)
                 elif kind == "fb":
-                    self._draw_frame(*payload)
+                    frame = payload
                 elif kind == "rx":
                     self._log(payload)
                 elif kind == "tx":
@@ -623,6 +627,9 @@ class App(tk.Tk):
         except queue.Empty:
             pass
 
+        if frame is not None:
+            self._draw_frame(*frame)
+
         self._push_game()
 
         now = time.time()
@@ -635,7 +642,17 @@ class App(tk.Tk):
         # Hidden in the tray nobody is drawing anything - no point spinning 20
         # times a second to update invisible widgets. Telemetry to the board is
         # rate-limited separately, in _send_loop.
-        self.after(50 if self.state() == "normal" else 250, self._pump)
+        #
+        # With the mirror running we turn faster than the frames arrive: at 50 ms
+        # a 20 fps stream would wait up to half a frame here and the screen would
+        # visibly trail the panel.
+        if self.state() != "normal":
+            delay = 250
+        elif self.mirror_var.get():
+            delay = 20
+        else:
+            delay = 50
+        self.after(delay, self._pump)
 
     def _send_loop(self):
         """The only place that sends telemetry. Its own rate, independent of how
