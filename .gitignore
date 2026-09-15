@@ -1,0 +1,15 @@
+# Build output - built with `python pc/build.py`, not committed
+/PicoPanel.exe
+
+# Python
+__pycache__/
+*.pyc
+
+# Arduino build leftovers
+/build/
+*.hex
+*.uf2
+
+# OS
+Thumbs.db
+.DS_Store
