@@ -2205,8 +2205,17 @@ void mirrorService() {
 
   // A dark panel is a dark mirror. render() returns early while the screen is
   // off, so no snapshot is coming - we send a blank frame on purpose rather
-  // than leaving the last picture frozen on the PC.
+  // than leaving the last picture frozen on the PC. Once, though: a sleeping
+  // panel has nothing new to say, and repeating it 20 times a second would
+  // spend bandwidth on an unchanging black rectangle.
+  static bool blankSent = false;
   bool blank = (oledSleep == 2);
+  if (blank) {
+    if (blankSent) return;
+    blankSent = true;
+  } else {
+    blankSent = false;
+  }
   if (!blank) {
     mutex_enter_blocking(&mirrorMux);
     bool have = mirrorSnapFresh;
