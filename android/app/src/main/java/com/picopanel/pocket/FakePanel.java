@@ -17,10 +17,12 @@ public final class FakePanel {
     public interface Sink { void line(String text); }
 
     private static final double REPORT_HZ = 5, MIRROR_HZ = 10;
+    private static final long USR_HOLD_MS = 1000;    // USER held this long = arm/disarm HID
+    private static final long USR_DOUBLE_MS = 250;   // window for the second press ('w' on the board)
 
     // enum Page { P_OVERVIEW = 0, P_GAME, P_HID, P_SW, P_ENC, P_BTN, P_PCF,
     //             P_I2C, P_INFO };  -- PG= is an index into Protocol.PAGES.
-    private static final int P_OVERVIEW = 0, P_GAME = 1, P_SW = 3,
+    private static final int P_OVERVIEW = 0, P_GAME = 1, P_HID = 2, P_SW = 3,
                              P_ENC = 4, P_BTN = 5, P_PCF = 6;
     /** btn[].name in the firmware - two characters, to fit the 17px boxes. */
     private static final String[] BTN_LABELS = {"UP", "DN", "LF", "RT", "MD", "ST", "EN"};
@@ -30,8 +32,11 @@ public final class FakePanel {
     private int lastDir = 0;
     public final boolean[] btn = new boolean[7];
     public final boolean[] pcf = new boolean[8];
-    public int page = 0;
+    public int page = 0, gameSub = 0;
     public boolean hid = true, mirror = true, demo = true;
+    public boolean media = false;        // layer two, latched by double-tapping USER
+    private boolean usrDown = false, usrStage1 = false;
+    private double usrPressAt = 0, usrLastShort = 0;
     public String gameSrc = "-";
     public int gameLines = 0;
 
@@ -72,6 +77,7 @@ public final class FakePanel {
             case P_ENC:      drawEnc();      break;
             case P_BTN:      drawBtnPage();  break;
             case P_PCF:      drawPcf();      break;
+            case P_HID:      drawHid();      break;
             default:
                 // HID, I2C and INFO read live hardware the emulator has no
                 // model of; a guess would be worse than saying so.
@@ -85,9 +91,10 @@ public final class FakePanel {
     private void header() {
         screen.rect(0, 0, screen.width, 9, true);
         screen.text(2, 1, Protocol.PAGES[page], false, 1);
-        String mark = hid ? "HID " : "";
+        String mark = (hid ? "HID " : "") + (media ? "M " : "");
         int cur = page + 1, tot = Protocol.PAGES.length;
-        if (page == P_GAME && !"-".equals(gameSrc)) { cur = 1; tot = 3; }
+        // On GAME the header counts the game's own sub-pages, not the panel's.
+        if (page == P_GAME && !"-".equals(gameSrc)) { cur = gameSub + 1; tot = 3; }
         String buf = mark + cur + "/" + tot;
         screen.text(screen.width - 2 - 6 * buf.length(), 1, buf, false, 1);
     }
@@ -140,6 +147,11 @@ public final class FakePanel {
         screen.text(0, 23, String.format(Locale.ROOT, "0x20 raw 0x%02X", raw));
     }
 
+    private void drawHid() {
+        screen.text(0, 11, (hid ? "ARMED" : "off") + (media ? " MEDIA" : "")
+                           + "  SW1=" + pos(sw1) + " SW2=" + pos(sw2));
+    }
+
     private void drawGame() {
         if ("-".equals(gameSrc)) {
             screen.text(0, 13, "no game");
@@ -163,6 +175,55 @@ public final class FakePanel {
         return "!FB " + s.width + " " + s.height + " " + base64(s.buf);
     }
 
+    /**
+     * USER pressed. Nothing happens yet: the page changes on RELEASE, because
+     * the button also carries a long press, and otherwise the page would jump
+     * every time you armed HID on the way past.
+     */
+    public void userDown() {
+        usrDown = true;
+        usrPressAt = now();
+        usrStage1 = false;
+    }
+
+    /** The long press fires while the button is still held, not on release. */
+    public void userService() {
+        if (!usrDown || usrStage1) return;
+        if ((now() - usrPressAt) * 1000 >= USR_HOLD_MS) {
+            usrStage1 = true;
+            hid = !hid;
+            emit("HID " + (hid ? "armed" : "disarmed"));
+        }
+    }
+
+    public void userUp() {
+        usrDown = false;
+        if (usrStage1) return;                       // the hold was the action
+        double n = now();
+        long gap = usrLastShort > 0 ? Math.round((n - usrLastShort) * 1000) : 0;
+        if (usrLastShort > 0 && gap < USR_DOUBLE_MS) {
+            // Second press: step the page back, the first one moved it on.
+            page = (page + Protocol.PAGES.length - 1) % Protocol.PAGES.length;
+            usrLastShort = 0;
+            media = !media;
+            emit("[usr] double press at " + gap + " ms -> layer = "
+                 + (media ? "MEDIA" : "gamepad"));
+            return;
+        }
+        if (gap > 0)
+            emit("[usr] single press, " + gap + " ms after the previous one (window "
+                 + USR_DOUBLE_MS + ")");
+        usrLastShort = n;
+        // Armed and driving: USER walks the game's sub-pages, not the
+        // diagnostic ones. Disarm to get back out.
+        if (hid && !"-".equals(gameSrc)) {
+            page = P_GAME;
+            gameSub = (gameSub + 1) % 3;
+            return;
+        }
+        page = (page + 1) % Protocol.PAGES.length;
+    }
+
     /** One line from the app: a command letter, or a '$' telemetry line. */
     public void command(String text) {
         if (text == null) return;
@@ -183,6 +244,8 @@ public final class FakePanel {
                            + " TOT=" + total + " ERR=" + errors); break;
             case 'i': emit("I2C scan: 0x3C SSD1306, 0x20 PCF8574   (emulated)"); break;
             case 'n': emit("encoder: 20 detents/turn, filtered, mode=edge (emulated)"); break;
+            case 'y': media = !media;
+                      emit("layer = " + (media ? "MEDIA" : "gamepad")); break;
             case 'r': total = 0; errors = 0; emit("counters reset"); break;
             case '?':
                 emit("i b k c x  I2C: rescan, bus test, recovery, speed, re-init");
@@ -213,6 +276,7 @@ public final class FakePanel {
     /** Produce whatever the board would have sent by now. Call it often. */
     public void service() {
         double n = now();
+        userService();
         if (n >= nextDemo) { nextDemo = n + 0.35; demoStep(); }
         if (n >= nextReport) { nextReport = n + 1 / REPORT_HZ; emit(reportLine()); }
         if (mirror && n >= nextFrame) { nextFrame = n + 1 / MIRROR_HZ; emit(frameLine()); }

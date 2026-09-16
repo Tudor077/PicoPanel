@@ -39,6 +39,8 @@ REPORT_HZ = 5.0          # the board reports ~5x/second
 MIRROR_HZ = 10.0         # and mirrors at ~10 fps while 'o' is on
 SLEEP_DIM_S = 10.0       # screen dims after 10 s idle, dark after 20 s
 SLEEP_OFF_S = 20.0
+USR_HOLD_MS = 1000       # USER held this long = arm / disarm HID
+USR_DOUBLE_MS = 250      # window for the second press ('w' changes it on the board)
 
 # 5x7 glyphs, one byte per column, bit 0 = top row. Same shapes the Adafruit
 # GFX default font uses, so the emulated screen reads like the real one.
@@ -159,6 +161,12 @@ class FakePanel:
         self.btn = [False] * 7            # UP DWN LFT RHT MID SET ENC_SW
         self.pcf = [False] * 8            # A1..A4 B1..B4
         self.page = 0
+        self.media = False       # layer two, latched by double-tapping USER
+        self.game_sub = 0
+        self._usr_down = False
+        self._usr_press_at = 0.0
+        self._usr_stage1 = False
+        self._usr_last_short = 0.0
         self.hid = True
         self.mirror = False
         self.game_src = "-"
@@ -230,9 +238,12 @@ class FakePanel:
             self._draw_btn_page()
         elif self.page == P_PCF:
             self._draw_pcf()
+        elif self.page == P_HID:
+            self._draw_hid()
         else:
             # HID, I2C and INFO read live hardware the emulator has no model
             # of; drawing a guess would be worse than saying so.
+            # I2C and INFO read live bus state there is no model for.
             s.text(0, 13, "not emulated")
             s.text(0, 23, PAGE_NAME[self.page] + " needs hw")
         return s
@@ -242,10 +253,11 @@ class FakePanel:
         s = self.screen
         s.rect(0, 0, SCREEN_W, 9, fill=True)
         s.text(2, 1, PAGE_NAME[self.page], color=0)
-        mark = "HID " if self.hid else ""
+        mark = ("HID " if self.hid else "") + ("M " if self.media else "")
         cur, tot = self.page + 1, len(PAGE_NAME)
         if self.page == P_GAME and self.game_src != "-":
-            cur, tot = 1, 3
+            # On GAME the header counts the game's own sub-pages, not the panel's.
+            cur, tot = self.game_sub + 1, 3
         buf = "{}{}/{}".format(mark, cur, tot)
         s.text(SCREEN_W - 2 - 6 * len(buf), 1, buf, color=0)
 
@@ -293,6 +305,13 @@ class FakePanel:
             s.text(x + 5, 13, str(i + 1), color=0 if on else 1)
         s.text(0, 23, "0x20 raw 0x{:02X}".format(
             sum(0 if v else 1 << i for i, v in enumerate(self.pcf))))
+
+    def _draw_hid(self):
+        s = self.screen
+        s.text(0, 11, "{}{}  SW1={} SW2={}".format(
+            "ARMED" if self.hid else "off",
+            " MEDIA" if self.media else "",
+            self.sw1 or "?", self.sw2 or "?"))
 
     def _draw_game(self):
         s = self.screen
@@ -353,6 +372,52 @@ class FakePanel:
             self.sw2 = self.rng.randint(1, 5)
             self.poke()
 
+    # -------------------------------------------------------- the USER button
+    def user_down(self):
+        """Press. Nothing happens yet: the page changes on RELEASE, because the
+        button also has a long press and the page would otherwise jump every
+        time you armed HID."""
+        self._usr_down = True
+        self._usr_press_at = time.monotonic()
+        self._usr_stage1 = False
+        self.poke()
+
+    def user_service(self):
+        """The long press fires while the button is still held, not on release."""
+        if not self._usr_down or self._usr_stage1:
+            return
+        if (time.monotonic() - self._usr_press_at) * 1000 >= USR_HOLD_MS:
+            self._usr_stage1 = True
+            self.hid = not self.hid
+            self._line("HID {}".format("armed" if self.hid else "disarmed"))
+
+    def user_up(self):
+        self._usr_down = False
+        self.poke()
+        if self._usr_stage1:
+            return                      # the hold was the action
+        now = time.monotonic()
+        gap = int((now - self._usr_last_short) * 1000) if self._usr_last_short else 0
+        if self._usr_last_short and gap < USR_DOUBLE_MS:
+            # Second press: step the page back (the first one moved it on).
+            self.page = (self.page + len(PAGE_NAME) - 1) % len(PAGE_NAME)
+            self._usr_last_short = 0.0
+            self.media = not self.media
+            self._line("[usr] double press at {} ms -> layer = {}".format(
+                gap, "MEDIA" if self.media else "gamepad"))
+            return
+        if gap:
+            self._line("[usr] single press, {} ms after the previous one "
+                       "(window {})".format(gap, USR_DOUBLE_MS))
+        self._usr_last_short = now
+        # Armed and driving: USER walks the game's sub-pages, not the
+        # diagnostic ones. Disarm to get back out.
+        if self.hid and self.game_src != "-":
+            self.page = P_GAME
+            self.game_sub = (self.game_sub + 1) % 3
+            return
+        self.page = (self.page + 1) % len(PAGE_NAME)
+
     # ------------------------------------------------------------- the inputs
     def command(self, text):
         """One line from the PC: a command letter, or a '$' telemetry line."""
@@ -383,6 +448,9 @@ class FakePanel:
             self._line("encoder: 20 detents/turn, filtered, mode=edge (emulated)")
         elif c in "iI":
             self._line("I2C scan: 0x3C SSD1306, 0x20 PCF8574   (emulated)")
+        elif c in "yY":
+            self.media = not self.media
+            self._line("layer = {}".format("MEDIA" if self.media else "gamepad"))
         elif c in "rR":
             self.total = 0
             self.errors = 0
@@ -396,6 +464,7 @@ class FakePanel:
     def service(self, now=None):
         """Produce whatever the board would have sent by now."""
         now = time.monotonic() if now is None else now
+        self.user_service()
         if now >= self._next_demo:
             self._demo_step(now)
         if now >= self._next_report:

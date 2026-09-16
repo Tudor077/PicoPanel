@@ -42,9 +42,9 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
     private static final int OK = Color.rgb(0x3F, 0xAE, 0x7A);
     private static final int BAD = Color.rgb(0xD9, 0x5C, 0x52);
 
-    private static final String[] COMMANDS = {"o", "u", "?", "i", "p", "n", "r"};
+    private static final String[] COMMANDS = {"o", "u", "y", "?", "i", "p", "n", "r"};
     private static final String[] COMMAND_LABELS =
-        {"mirror", "arm HID", "help", "I2C scan", "pins", "encoder", "reset"};
+        {"mirror", "arm HID", "media layer", "help", "I2C scan", "pins", "encoder", "reset"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final FakePanel emu = new FakePanel();
@@ -58,6 +58,8 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
     private final View[] pcfLamps = new View[8], btnLamps = new View[7];
     private final TextView[] pcfText = new TextView[8], btnText = new TextView[7];
     private ScrollView logScroll;
+    private TextView userHint;
+    private long usbUserDown = 0, usbUserLast = 0;
     private final android.text.SpannableStringBuilder logBuf =
         new android.text.SpannableStringBuilder();
     private int logLines = 0;
@@ -130,6 +132,11 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
             paintMode(modeEmu, !connected);
             paintMode(modeUsb, connected);
             if (!connected) oled.clear("PICOPANEL");
+            userHint.setText(connected
+                ? "Hold 1 s to arm HID, double-tap for the media layer. Changing the "
+                + "page needs the real USER button on the board."
+                : "Tap for the next page \u00b7 twice for the media layer \u00b7 "
+                + "hold 1 s to arm HID.");
         });
     }
 
@@ -156,6 +163,44 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
         LinearLayout bezel = card();
         bezel.addView(oled);
         col.addView(bezel);
+
+        // The USER button sits under the screen, because that is what it drives.
+        LinearLayout userRow = new LinearLayout(this);
+        userRow.setOrientation(LinearLayout.HORIZONTAL);
+        userRow.setGravity(Gravity.CENTER_VERTICAL);
+        final Button userBtn = actionButton("USER", null, 0f);
+        userBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        userBtn.setBackground(rounded(Color.rgb(0x1B, 0x24, 0x2E), AMBER));
+        userBtn.setPadding(dp(22), dp(12), dp(22), dp(12));
+        userBtn.setOnTouchListener((v, ev) -> {
+            switch (ev.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    userBtn.setBackground(rounded(AMBER, AMBER));
+                    userBtn.setTextColor(Color.rgb(0x1A, 0x12, 0x06));
+                    onUserDown();
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    userBtn.setBackground(rounded(Color.rgb(0x1B, 0x24, 0x2E), AMBER));
+                    userBtn.setTextColor(INK);
+                    if (ev.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                        onUserUp();
+                        v.performClick();   // keeps accessibility services in the loop
+                    }
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        userRow.addView(userBtn);
+        userHint = label("Tap for the next page \u00b7 twice for the media layer \u00b7 "
+                       + "hold 1 s to arm HID.", 12, MUTED);
+        LinearLayout.LayoutParams hintLp =
+            new LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f);
+        hintLp.setMargins(dp(10), 0, 0, 0);
+        userHint.setLayoutParams(hintLp);
+        userRow.addView(userHint);
+        col.addView(userRow);
 
         col.addView(heading("Switches"));
         LinearLayout swCard = card();
@@ -396,6 +441,27 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
     private void paintMode(Button b, boolean active) {
         b.setBackground(rounded(active ? SURFACE : Color.rgb(0x14, 0x1B, 0x23), active ? AMBER : LINE));
         b.setTextColor(active ? INK : MUTED);
+    }
+
+    /**
+     * The USER button. In emulator mode it drives FakePanel's own state machine,
+     * with the real 250 ms double window and 1 s hold. Against a real panel it
+     * cannot change the page - no serial command does, USER is a physical button
+     * on the board - but the hold and the double press have console equivalents
+     * ('u' and 'y'), so those are sent instead.
+     */
+    private void onUserDown() {
+        if (usbMode) usbUserDown = System.currentTimeMillis(); else emu.userDown();
+    }
+
+    private void onUserUp() {
+        if (!usbMode) { emu.userUp(); return; }
+        long now = System.currentTimeMillis();
+        if (now - usbUserDown >= 1000) { send("u"); return; }
+        long gap = usbUserLast > 0 ? now - usbUserLast : 0;
+        if (usbUserLast > 0 && gap < 250) { usbUserLast = 0; send("y"); return; }
+        usbUserLast = now;
+        log("USER can't change the page over serial - press it on the board.", BAD);
     }
 
     private void nudge(int delta) {
