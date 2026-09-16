@@ -1444,6 +1444,10 @@ int32_t  gameAlt      = 0;
 
 // The game's KIND picks the page set, not its name: 'c' = car, 'a' = aircraft.
 // That way a new sim needs no change here, it just has to send knd.
+// 'c' road vehicle, 'a' airliner-style aircraft, 'w' War Thunder aircraft,
+// 'g' War Thunder ground vehicle. War Thunder gets its own two because it has
+// no radios, transponder or autopilot, and does have G, angle of attack and a
+// crew roster - on the shared aircraft pages half of them stayed blank.
 char     gameKind     = 'c';
 uint8_t  gameSub      = 0;      // sub-page within the current set
 int32_t  gameBlink    = 0;      // bit0 left, bit1 right
@@ -1456,8 +1460,18 @@ char     gameC1[10]   = "";
 char     gameC2[10]   = "";
 char     gameSqk[6]   = "";
 char     gameAp[18]   = "";
+char     gameCrew[8]  = "";
+int32_t  gameG        = 0;      // x10
+int32_t  gameAoa      = 0;
 
-static uint8_t gameSubCount() { return (gameKind == 'a') ? 4 : 3; }
+static uint8_t gameSubCount() {
+  switch (gameKind) {
+    case 'a': return 4;      // radios, transponder, autopilot
+    case 'w': return 3;      // no radios in War Thunder
+    case 'g': return 2;      // a tank has little to show
+    default:  return 3;
+  }
+}
 uint32_t gameSeen     = 0;      // millis at the last line received
 uint32_t gameLines    = 0;
 
@@ -1483,10 +1497,18 @@ static void gameSetField(char *key, char *val) {
   else if (!strcasecmp(key, "c1"))     { strncpy(gameC1,  val, sizeof(gameC1) - 1);  gameC1[sizeof(gameC1) - 1] = 0; }
   else if (!strcasecmp(key, "c2"))     { strncpy(gameC2,  val, sizeof(gameC2) - 1);  gameC2[sizeof(gameC2) - 1] = 0; }
   else if (!strcasecmp(key, "sqk"))    { strncpy(gameSqk, val, sizeof(gameSqk) - 1); gameSqk[sizeof(gameSqk) - 1] = 0; }
-  else if (!strcasecmp(key, "ap"))     { strncpy(gameAp,  val, sizeof(gameAp) - 1);  gameAp[sizeof(gameAp) - 1] = 0; }
+  else if (!strcasecmp(key, "ap"))     { strncpy(gameAp,   val, sizeof(gameAp) - 1);   gameAp[sizeof(gameAp) - 1] = 0; }
+  else if (!strcasecmp(key, "crew"))   { strncpy(gameCrew, val, sizeof(gameCrew) - 1); gameCrew[sizeof(gameCrew) - 1] = 0; }
+  else if (!strcasecmp(key, "g"))      gameG   = atol(val);
+  else if (!strcasecmp(key, "aoa"))    gameAoa = atol(val);
   else if (!strcasecmp(key, "knd")) {
-    char k = (val[0] == 'a') ? 'a' : 'c';
-    if (k != gameKind) { gameKind = k; gameSub = 0; }   // the page set changed
+    // Full names, not first letters: "air" and "wtair" both start with a
+    // vowel's worth of ambiguity, and a wrong guess draws the wrong pages.
+    char k = 'c';
+    if      (!strcasecmp(val, "air"))   k = 'a';
+    else if (!strcasecmp(val, "wtair")) k = 'w';
+    else if (!strcasecmp(val, "wtgnd")) k = 'g';
+    if (k != gameKind) { gameKind = k; gameSub = 0; }   // the set changed
   }
 }
 
@@ -2115,6 +2137,83 @@ static void drawAirPage() {
   }
 }
 
+
+// ---- War Thunder aircraft: 3 pages ------------------------------------
+static void drawWtAirPage() {
+  oled->setTextSize(1);
+  switch (gameSub) {
+    case 0:
+      oled->setTextSize(2);
+      oled->setCursor(0, gTop + 1);
+      oled->print(gameKts);
+      oled->setTextSize(1);
+      oled->print(F("kt"));
+      oled->setCursor(62, gTop + 1);
+      oled->print(F("VS "));
+      if (gameVs > 0) oled->print('+');
+      oled->print(gameVs);
+      oled->setCursor(62, gTop + 11);
+      oled->print(F("ALT ")); oled->print(gameAltFt);
+      break;
+    case 1:
+      // What a pilot in this game actually watches: how hard he's pulling and
+      // how close the wing is to letting go.
+      oled->setTextSize(2);
+      oled->setCursor(0, gTop + 1);
+      oled->print(gameG / 10); oled->print('.'); oled->print(gameG % 10);
+      oled->setTextSize(1);
+      oled->print(F("G"));
+      oled->setCursor(62, gTop + 1);
+      oled->print(F("AoA ")); oled->print(gameAoa);
+      oled->setCursor(62, gTop + 11);
+      oled->print(F("THR ")); oled->print(gameThr); oled->print('%');
+      break;
+    default:
+      oled->setCursor(0, gTop + 1);
+      oled->print(F("FUEL "));
+      if (gameFuel >= 0) { oled->print(gameFuel); oled->print('%'); } else oled->print('?');
+      oled->setCursor(62, gTop + 1);
+      oled->print(F("TEMP ")); oled->print(gameTmp); oled->print('C');
+      oled->setCursor(0, gTop + 11);
+      if (gameHdg >= 0) { oled->print(F("HDG ")); oled->print(gameHdg); }
+      oled->setCursor(62, gTop + 11);
+      oled->print(F("RPM ")); oled->print(gameRpm);
+      break;
+  }
+}
+
+// ---- War Thunder ground: 2 pages --------------------------------------
+static void drawWtGndPage() {
+  if (gameSub == 0) {
+    oled->setTextSize(2);
+    oled->setCursor(0, gTop + 1);
+    oled->print(gameSpd);
+    oled->setTextSize(1);
+    oled->setCursor(44, gTop + 1);
+    oled->print(F("km/h"));
+
+    oled->setCursor(44, gTop + 11);
+    if (gameCrew[0]) { oled->print(F("CREW ")); oled->print(gameCrew); }
+
+    oled->setTextSize(2);
+    oled->setCursor(SCREEN_W - 12, gTop + 1);
+    if      (gameGear  < 0) oled->print('R');
+    else if (gameGear == 0) oled->print('N');
+    else if (gameGear < 10) oled->print(gameGear);
+    else { oled->setTextSize(1); oled->setCursor(SCREEN_W - 12, gTop + 5); oled->print(gameGear); }
+
+    drawRpmBar((oledH >= 64) ? 44 : 26);
+  } else {
+    oled->setTextSize(1);
+    oled->setCursor(0, gTop + 1);
+    oled->print(F("RPM "));  oled->print(gameRpm);
+    oled->setCursor(68, gTop + 1);
+    oled->print(F("TEMP ")); oled->print(gameTmp); oled->print('C');
+    oled->setCursor(0, gTop + 11);
+    oled->print(gameTxt[0] ? gameTxt : "-");
+  }
+}
+
 void drawGame() {
   if (!gameFresh()) {
     oled->setCursor(0, gTop + 3);
@@ -2137,7 +2236,12 @@ void drawGame() {
   oled->setTextColor(SSD1306_WHITE);
 
   if (gameSub >= gameSubCount()) gameSub = 0;
-  if (gameKind == 'a') drawAirPage(); else drawCarPage();
+  switch (gameKind) {
+    case 'a': drawAirPage();    break;
+    case 'w': drawWtAirPage();  break;
+    case 'g': drawWtGndPage();  break;
+    default:  drawCarPage();    break;
+  }
 
   oled->setTextSize(1);            // don't leave size 2 behind us
 }

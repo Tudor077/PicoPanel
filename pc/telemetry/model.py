@@ -43,8 +43,15 @@ class Telemetry:
     alt_m: float = 0.0
     text: str = ""
 
-    # "car" or "air" - the board picks its page set from this, not from the
-    # game's name. So a new flight sim needs no firmware change at all.
+    # Which PAGE SET the board draws. Not the game's name: a new sim only has
+    # to send the right kind, and needs no firmware change.
+    #
+    #   car    a road vehicle       air    an aircraft with radios and autopilot
+    #   wtair  a War Thunder plane  wtgnd  a War Thunder ground vehicle
+    #
+    # War Thunder earns its own two because it has no radios, transponder or
+    # autopilot at all, and does have G, angle of attack and a crew roster.
+    # Sharing the aircraft pages left half of them permanently blank.
     kind: str = "car"
 
     # cars
@@ -59,6 +66,11 @@ class Telemetry:
     com2: str = ""
     squawk: str = ""
     ap_text: str = ""           # autopilot modes, already formatted
+
+    # War Thunder
+    gforce: float = 0.0
+    aoa: float = 0.0
+    crew: str = ""              # "4/5" - alive out of total
 
     stamp: float = field(default_factory=time.time)
 
@@ -86,7 +98,19 @@ class Telemetry:
             parts.append(f"alt={int(round(self.alt_m))}")
 
         parts.append(f"knd={self.kind}")
-        if self.kind == "car":
+        if self.kind == "wtgnd":
+            if self.crew:
+                parts.append(f"crew={_clean(self.crew, 7)}")
+        elif self.kind == "wtair":
+            parts.append(f"kts={int(round(self.kts))}")
+            parts.append(f"vs={int(round(self.vspeed_fpm))}")
+            parts.append(f"aft={int(round(self.alt_ft))}")
+            if self.hdg:
+                parts.append(f"hdg={int(round(self.hdg))}")
+            # x10 so the board never has to format a float
+            parts.append(f"g={int(round(self.gforce * 10))}")
+            parts.append(f"aoa={int(round(self.aoa))}")
+        elif self.kind == "car":
             parts.append(f"blk={int(self.blinkers)}")
             if self.turbo_bar:
                 # x10: no floating point on the board for a number we display

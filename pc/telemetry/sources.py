@@ -757,14 +757,16 @@ class WarThunderSource(Source):
             if ind.get("driving_direction_mode") is False and gear != 0:
                 gear = -abs(gear)
             return Telemetry(
-                src="WarThunder",
-                kind="car",
+                src="WT",
+                kind="wtgnd",
                 speed_kmh=abs(cls._f(ind, "speed")),
                 rpm=rpm,
                 rpm_max=rpm_max,
                 gear=gear,
                 fuel_pct=-1.0,               # not reported for ground vehicles
                 engine_c=cls._f(ind, "water_temperature", "oil_temperature"),
+                crew="%d/%d" % (int(cls._f(ind, "crew_current")),
+                                int(cls._f(ind, "crew_total"))),
                 text=str(ind.get("type", ""))[:24],
             )
 
@@ -775,8 +777,8 @@ class WarThunderSource(Source):
         # The aircraft pages are laid out for aviation units, and War Thunder
         # answers in metric - so the conversions live here, not on the board.
         return Telemetry(
-            src="WarThunder",
-            kind="air",
+            src="WT",
+            kind="wtair",
             speed_kmh=ias,
             kts=ias / 1.852,
             alt_ft=cls._f(st, "H, m", default=cls._f(ind, "altitude_hour")) * 3.28084,
@@ -788,10 +790,8 @@ class WarThunderSource(Source):
             fuel_pct=(fuel / fuel0 * 100.0) if fuel0 else -1.0,
             throttle=cls._f(st, "throttle 1, %") / 100.0,
             engine_c=cls._f(st, "water temp 1, C", default=cls._f(ind, "water_temperature")),
-            # No radios, transponder or autopilot exist in the game, so those
-            # pages would be blank. We put the numbers a pilot actually watches
-            # there instead.
-            ap_text="G %.1f AoA %.0f" % (cls._f(st, "Ny"), cls._f(st, "AoA, deg")),
+            gforce=cls._f(st, "Ny"),
+            aoa=cls._f(st, "AoA, deg"),
             text=str(ind.get("type", ""))[:24],
         )
 
@@ -823,7 +823,7 @@ class WarThunderSource(Source):
                     last_kind = tel.kind
                     peak = tel.rpm          # new vehicle, new rev range
                     self.status = "%s: %s" % (
-                        "aircraft" if tel.kind == "air" else "ground vehicle",
+                        "aircraft" if tel.kind == "wtair" else "ground vehicle",
                         tel.text or "?")
                 self._put(tel)
             self._stop.wait(wait)
