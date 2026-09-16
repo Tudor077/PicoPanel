@@ -1,0 +1,37 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.picopanel.pocket'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.picopanel.pocket"
+        minSdk 26              // adaptive icons, and every phone in use
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        debug {
+            // The debug keystore Gradle generates is what makes this APK
+            // sideloadable straight off a CI run, with nothing to sign by hand.
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// No dependencies on purpose: framework widgets only, no AndroidX. One less
+// thing to resolve, and nothing to go stale.
+dependencies {
+}

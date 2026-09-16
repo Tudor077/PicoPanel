@@ -1,0 +1,5 @@
+// Root build file. The version here is the only place the Android Gradle
+// Plugin version is named.
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

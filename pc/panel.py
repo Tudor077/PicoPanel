@@ -103,8 +103,12 @@ def find_pico():
     return None
 
 
+EMULATOR_PORT = "EMULATOR"
+
+
 def list_ports():
-    out = []
+    # The emulator first, so the app is usable with no board on the desk.
+    out = [f"{EMULATOR_PORT}  <- no hardware needed"]
     for p in serial.tools.list_ports.comports():
         out.append(f"{p.device}{'  <- Pico' if p.vid == RP2040_VID else ''}")
     return out
@@ -129,7 +133,14 @@ class Link:
     def connect(self, port):
         self.disconnect()
         try:
-            self.ser = serial.Serial(port, BAUD, timeout=0.2)
+            if port == EMULATOR_PORT:
+                # FakeSerial duck-types pyserial, so _reader() below cannot tell
+                # the difference - which is the point: the emulator exercises
+                # the same parsing path the board does.
+                from fakepanel import FakeSerial
+                self.ser = FakeSerial(port, BAUD, timeout=0.2)
+            else:
+                self.ser = serial.Serial(port, BAUD, timeout=0.2)
         except serial.SerialException as e:
             self.q.put(("err", f"can't open {port}: {e}"))
             self.ser = None

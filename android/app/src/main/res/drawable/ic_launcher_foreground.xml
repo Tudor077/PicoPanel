@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- the OLED -->
+    <path android:fillColor="#E6F2FF"
+        android:pathData="M28,40 H80 V58 H28 Z M30,42 V56 H78 V42 Z" />
+    <!-- two lit rows of pixels on it -->
+    <path android:fillColor="#E8912D" android:pathData="M33,45 H49 V48 H33 Z" />
+    <path android:fillColor="#6FC3D9" android:pathData="M33,50 H68 V53 H33 Z" />
+    <!-- the encoder -->
+    <path android:fillColor="#E8912D"
+        android:pathData="M54,64 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0 Z M54,64 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0 Z" />
+    <!-- two buttons -->
+    <path android:fillColor="#8598AA" android:pathData="M31,62 H41 V72 H31 Z" />
+    <path android:fillColor="#8598AA" android:pathData="M67,62 H77 V72 H67 Z" />
+</vector>

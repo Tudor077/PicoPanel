@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 0x2E8A = 11914, the Raspberry Pi (RP2040) vendor id the board enumerates
+         under. The PC app matches on exactly this. -->
+    <usb-device vendor-id="11914" />
+</resources>
