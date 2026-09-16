@@ -113,7 +113,12 @@ def main():
         elif key == "http":
             s = cls(port=args.http_port)
         elif key == "ets2":
-            s = cls(url=args.ets2_url)
+            # The source now takes host/port so it can keep one connection
+            # alive; the --ets2-url flag is split here to stay compatible.
+            from urllib.parse import urlparse
+            u = urlparse(args.ets2_url)
+            s = cls(host=u.hostname or 'localhost', port=u.port or 25555,
+                    path=u.path or '/api/ets2/telemetry')
         else:
             s = cls()
         s.start()
