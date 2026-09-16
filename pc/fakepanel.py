@@ -68,8 +68,15 @@ FONT = {
     "Y": (0x03, 0x04, 0x78, 0x04, 0x03), "Z": (0x61, 0x51, 0x49, 0x45, 0x43),
 }
 
-PAGES = ["PANEL", "GAME", "HID", "SWITCHES", "ENCODER",
-         "BUTTONS", "PCF8574", "I2C", "INFO"]
+# enum Page { P_OVERVIEW = 0, P_GAME, P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C,
+#             P_INFO, P_COUNT };  -- the PG= number is an index into this.
+P_OVERVIEW, P_GAME, P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO = range(9)
+PAGE_NAME = ["PANEL", "GAME", "HID", "SWITCHES", "ENCODER",
+             "BUTTONS", "PCF8574", "I2C", "INFO"]
+PAGES = PAGE_NAME                      # kept for anything reading the old name
+
+# btn[].name in the firmware - two characters, so they fit the 17px boxes.
+BTN_NAMES = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
 HELP = [
     "i b k c x  I2C: rescan, bus test, recovery, speed, re-init",
@@ -102,7 +109,8 @@ class Screen:
         else:
             self.buf[i] &= ~bit & 0xFF
 
-    def text(self, x, y, s):
+    def text(self, x, y, s, color=1, size=1):
+        """Adafruit_GFX's classic 5x7 font: 6px advance, y is the glyph top."""
         for ch in str(s).upper():
             glyph = FONT.get(ch)
             if glyph is not None:
@@ -110,17 +118,20 @@ class Screen:
                     bits = glyph[col]
                     for row in range(7):
                         if bits & (1 << row):
-                            self.pixel(x + col, y + row)
-            x += 6
+                            for sx in range(size):
+                                for sy in range(size):
+                                    self.pixel(x + col * size + sx,
+                                               y + row * size + sy, color)
+            x += 6 * size
             if x >= self.w:
                 break
 
-    def rect(self, x, y, w, h, fill=False):
+    def rect(self, x, y, w, h, fill=False, color=1):
         for dx in range(w):
             for dy in range(h):
                 edge = dx in (0, w - 1) or dy in (0, h - 1)
                 if fill or edge:
-                    self.pixel(x + dx, y + dy)
+                    self.pixel(x + dx, y + dy, color)
 
     def to_art(self):
         rows = []
@@ -142,6 +153,7 @@ class FakePanel:
         self.sw1 = 2                      # firmware calls it SW2: 3 positions
         self.sw2 = 3                      # firmware calls it SW3: 5 positions
         self.enc = 0
+        self._last_dir = 0
         self.total = 0
         self.errors = 0
         self.btn = [False] * 7            # UP DWN LFT RHT MID SET ENC_SW
@@ -197,28 +209,106 @@ class FakePanel:
         return 0
 
     def draw(self):
+        """The panel's own pages, as PicoPanel.ino draws them.
+
+        Transcribed from render(): header() then the per-page draw function.
+        Coordinates, box sizes and labels are the firmware's, not invented -
+        what you see here is what the 128x32 actually shows.
+        """
         s = self.screen
         s.clear()
-        name = PAGES[self.page]
-        if self.page == 0:
-            s.text(0, 0, f"{name}   {'HID' if self.hid else 'hid'}")
-            s.text(0, 8, f"SW1:{self.sw1}  SW2:{self.sw2}")
-            s.text(0, 16, f"ENC:{self.enc:+d} T:{self.total}")
-            lamps = "".join("*" if b else "." for b in self.pcf)
-            s.text(0, 24, f"AB:{lamps}")
-        elif self.page == 1:
-            s.text(0, 0, f"GAME {self.game_src}")
-            phase = (time.monotonic() - self.t0) * 1.7
-            speed = int(60 + 55 * math.sin(phase))
-            s.text(0, 10, f"{speed} KMH  G{2 + (speed // 40)}")
-            width = max(1, int(126 * (0.5 + 0.5 * math.sin(phase * 1.3))))
-            s.rect(0, 24, 128, 7)
-            s.rect(1, 25, width - 1, 5, fill=True)
+        self._header()
+        if self.page == P_OVERVIEW:
+            self._draw_overview()
+        elif self.page == P_GAME:
+            self._draw_game()
+        elif self.page == P_SW:
+            self._draw_sw_page()
+        elif self.page == P_ENC:
+            self._draw_enc()
+        elif self.page == P_BTN:
+            self._draw_btn_page()
+        elif self.page == P_PCF:
+            self._draw_pcf()
         else:
-            s.text(0, 0, name)
-            s.text(0, 12, f"PAGE {self.page} OF {len(PAGES) - 1}")
-            s.text(0, 22, "EMULATED")
+            # HID, I2C and INFO read live hardware the emulator has no model
+            # of; drawing a guess would be worse than saying so.
+            s.text(0, 13, "not emulated")
+            s.text(0, 23, PAGE_NAME[self.page] + " needs hw")
         return s
+
+    def _header(self):
+        """A filled white bar with black text - inverted, unlike every other page."""
+        s = self.screen
+        s.rect(0, 0, SCREEN_W, 9, fill=True)
+        s.text(2, 1, PAGE_NAME[self.page], color=0)
+        mark = "HID " if self.hid else ""
+        cur, tot = self.page + 1, len(PAGE_NAME)
+        if self.page == P_GAME and self.game_src != "-":
+            cur, tot = 1, 3
+        buf = "{}{}/{}".format(mark, cur, tot)
+        s.text(SCREEN_W - 2 - 6 * len(buf), 1, buf, color=0)
+
+    def _btn_row(self, y):
+        """Seven 17x10 boxes, filled when pressed - drawBtnRow()."""
+        s = self.screen
+        w, h = 17, 10
+        for i, name in enumerate(BTN_NAMES):
+            x = i * (w + 1)
+            pressed = self.btn[i]
+            s.rect(x, y, w, h, fill=pressed)
+            s.text(x + 3, y + 2, name, color=0 if pressed else 1)
+
+    def _draw_overview(self):
+        s = self.screen
+        s.text(0, 11, "S2:{} S3:{} E:{}".format(
+            self.sw1 or "?", self.sw2 or "?", self.enc))
+        self._btn_row(21)
+
+    def _draw_sw_page(self):
+        # drawSwRow(): "<name> <pos>/<expect>  c<common>  v<seen>"
+        s = self.screen
+        s.text(0, 11, "SW2 {}/3  c1  v3".format(self.sw1 or "?"))
+        s.text(0, 21, "SW3 {}/5  c1  v5".format(self.sw2 or "?"))
+
+    def _draw_enc(self):
+        s = self.screen
+        s.text(2, 13, str(self.enc), size=2)
+        direction = "CW" if self._last_dir > 0 else ("CCW" if self._last_dir < 0 else "--")
+        s.text(60, 12, "A1 B0 {}".format(direction))
+        s.text(60, 22, "T{} E{}".format(self.total, self.errors))
+
+    def _draw_btn_page(self):
+        s = self.screen
+        self._btn_row(11)
+        s.text(0, 24, " ".join("0" for _ in BTN_NAMES))
+
+    def _draw_pcf(self):
+        # Eight 15x10 boxes numbered 1..8 - drawPcf().
+        s = self.screen
+        for i in range(8):
+            x = i * 16
+            on = self.pcf[i]
+            s.rect(x, 11, 15, 10, fill=on)
+            s.text(x + 5, 13, str(i + 1), color=0 if on else 1)
+        s.text(0, 23, "0x20 raw 0x{:02X}".format(
+            sum(0 if v else 1 << i for i, v in enumerate(self.pcf))))
+
+    def _draw_game(self):
+        s = self.screen
+        if self.game_src == "-":
+            s.text(0, 13, "no game")
+            s.text(0, 23, "waiting for serial")
+            return
+        phase = (time.monotonic() - self.t0) * 1.7
+        speed = int(60 + 55 * math.sin(phase))
+        s.text(2, 12, str(speed), size=2)
+        s.text(56, 12, "KMH")
+        gear = 2 + speed // 40
+        s.text(104, 12, "G{}".format(gear))
+        width = max(2, int(126 * (0.5 + 0.5 * math.sin(phase * 1.3))))
+        s.rect(0, 24, 128, 7)
+        s.rect(1, 25, width - 1, 5, fill=True)
 
     def frame_line(self):
         state = self.sleep_state()
@@ -242,7 +332,10 @@ class FakePanel:
         if self.quiet_demo:
             return
         self._next_demo = now + 0.35
-        self.enc = max(-99, min(99, self.enc + self.rng.choice((0, 0, 1, 1, -1))))
+        step = self.rng.choice((0, 0, 1, 1, -1))
+        if step:
+            self._last_dir = step
+        self.enc = max(-99, min(99, self.enc + step))
         self.total += 1
         roll = self.rng.random()
         if roll < 0.22:

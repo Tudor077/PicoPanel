@@ -18,8 +18,16 @@ public final class FakePanel {
 
     private static final double REPORT_HZ = 5, MIRROR_HZ = 10;
 
+    // enum Page { P_OVERVIEW = 0, P_GAME, P_HID, P_SW, P_ENC, P_BTN, P_PCF,
+    //             P_I2C, P_INFO };  -- PG= is an index into Protocol.PAGES.
+    private static final int P_OVERVIEW = 0, P_GAME = 1, P_SW = 3,
+                             P_ENC = 4, P_BTN = 5, P_PCF = 6;
+    /** btn[].name in the firmware - two characters, to fit the 17px boxes. */
+    private static final String[] BTN_LABELS = {"UP", "DN", "LF", "RT", "MD", "ST", "EN"};
+
     public int sw1 = 2, sw2 = 3;           // firmware SW2 (3 pos), SW3 (5 pos)
     public int enc = 0, total = 0, errors = 0;
+    private int lastDir = 0;
     public final boolean[] btn = new boolean[7];
     public final boolean[] pcf = new boolean[8];
     public int page = 0;
@@ -47,30 +55,108 @@ public final class FakePanel {
             sw1, sw2, enc, total, b, errors, p, page, gameSrc, gameLines, hid ? "1" : "0");
     }
 
+    /**
+     * The panel's own pages, as PicoPanel.ino draws them.
+     *
+     * Transcribed from render(): header() then the per-page draw function.
+     * Every coordinate, box size and label here is the firmware's - this is
+     * what the real 128x32 shows, not an approximation of it.
+     */
     public Screen draw() {
-        double t = now();
         screen.clear();
-        if (page == 0) {
-            screen.text(0, 0, "PANEL   " + (hid ? "HID" : "---"));
-            screen.text(0, 8, "SW1:" + sw1 + "  SW2:" + sw2);
-            screen.text(0, 16, "ENC:" + (enc < 0 ? "-" : "+") + Math.abs(enc) + " T:" + total);
-            StringBuilder lamps = new StringBuilder("AB:");
-            for (boolean v : pcf) lamps.append(v ? '*' : '.');
-            screen.text(0, 24, lamps.toString());
-        } else if (page == 1) {
-            screen.text(0, 0, "GAME " + gameSrc);
-            int spd = (int) Math.round(60 + 55 * Math.sin(t * 1.7));
-            screen.text(0, 10, spd + " KMH  G" + (2 + Math.abs(spd) / 40));
-            int w = Math.max(2, (int) Math.round(126 * (0.5 + 0.5 * Math.sin(t * 2.2))));
-            screen.rect(0, 24, 128, 7, false);
-            screen.rect(1, 25, w - 1, 5, true);
-        } else {
-            screen.text(0, 0, Protocol.PAGES[page]);
-            screen.text(0, 12, "PAGE " + page + " OF " + (Protocol.PAGES.length - 1));
-            screen.text(0, 22, "EMULATED");
+        header();
+        switch (page) {
+            case P_OVERVIEW: drawOverview(); break;
+            case P_GAME:     drawGame();     break;
+            case P_SW:       drawSwPage();   break;
+            case P_ENC:      drawEnc();      break;
+            case P_BTN:      drawBtnPage();  break;
+            case P_PCF:      drawPcf();      break;
+            default:
+                // HID, I2C and INFO read live hardware the emulator has no
+                // model of; a guess would be worse than saying so.
+                screen.text(0, 13, "not emulated");
+                screen.text(0, 23, Protocol.PAGES[page] + " needs hw");
         }
         return screen;
     }
+
+    /** A filled white bar with black text - inverted, unlike every other page. */
+    private void header() {
+        screen.rect(0, 0, screen.width, 9, true);
+        screen.text(2, 1, Protocol.PAGES[page], false, 1);
+        String mark = hid ? "HID " : "";
+        int cur = page + 1, tot = Protocol.PAGES.length;
+        if (page == P_GAME && !"-".equals(gameSrc)) { cur = 1; tot = 3; }
+        String buf = mark + cur + "/" + tot;
+        screen.text(screen.width - 2 - 6 * buf.length(), 1, buf, false, 1);
+    }
+
+    /** Seven 17x10 boxes, filled when pressed - drawBtnRow(). */
+    private void btnRow(int y) {
+        final int w = 17, h = 10;
+        for (int i = 0; i < BTN_LABELS.length; i++) {
+            int x = i * (w + 1);
+            boolean pressed = btn[i];
+            screen.rect(x, y, w, h, pressed);
+            screen.text(x + 3, y + 2, BTN_LABELS[i], !pressed, 1);
+        }
+    }
+
+    private void drawOverview() {
+        screen.text(0, 11, "S2:" + pos(sw1) + " S3:" + pos(sw2) + " E:" + enc);
+        btnRow(21);
+    }
+
+    private void drawSwPage() {
+        // drawSwRow(): "<name> <pos>/<expect>  c<common>  v<seen>"
+        screen.text(0, 11, "SW2 " + pos(sw1) + "/3  c1  v3");
+        screen.text(0, 21, "SW3 " + pos(sw2) + "/5  c1  v5");
+    }
+
+    private void drawEnc() {
+        screen.text(2, 13, String.valueOf(enc), true, 2);
+        String dir = lastDir > 0 ? "CW" : lastDir < 0 ? "CCW" : "--";
+        screen.text(60, 12, "A1 B0 " + dir);
+        screen.text(60, 22, "T" + total + " E" + errors);
+    }
+
+    private void drawBtnPage() {
+        btnRow(11);
+        StringBuilder counts = new StringBuilder();
+        for (int i = 0; i < BTN_LABELS.length; i++) counts.append("0 ");
+        screen.text(0, 24, counts.toString());
+    }
+
+    /** Eight 15x10 boxes numbered 1..8 - drawPcf(). */
+    private void drawPcf() {
+        int raw = 0;
+        for (int i = 0; i < 8; i++) {
+            int x = i * 16;
+            screen.rect(x, 11, 15, 10, pcf[i]);
+            screen.text(x + 5, 13, String.valueOf(i + 1), !pcf[i], 1);
+            if (!pcf[i]) raw |= 1 << i;
+        }
+        screen.text(0, 23, String.format(Locale.ROOT, "0x20 raw 0x%02X", raw));
+    }
+
+    private void drawGame() {
+        if ("-".equals(gameSrc)) {
+            screen.text(0, 13, "no game");
+            screen.text(0, 23, "waiting for serial");
+            return;
+        }
+        double t = now();
+        int spd = (int) Math.round(60 + 55 * Math.sin(t * 1.7));
+        screen.text(2, 12, String.valueOf(spd), true, 2);
+        screen.text(56, 12, "KMH");
+        screen.text(104, 12, "G" + (2 + Math.abs(spd) / 40));
+        int w = Math.max(2, (int) Math.round(126 * (0.5 + 0.5 * Math.sin(t * 2.2))));
+        screen.rect(0, 24, 128, 7, false);
+        screen.rect(1, 25, w - 1, 5, true);
+    }
+
+    private static String pos(int p) { return p > 0 ? String.valueOf(p) : "?"; }
 
     public String frameLine() {
         Screen s = draw();
@@ -113,7 +199,9 @@ public final class FakePanel {
     private void demoStep() {
         if (!demo) return;
         int[] steps = {0, 0, 1, 1, -1};
-        enc = Math.max(-99, Math.min(99, enc + steps[rng.nextInt(steps.length)]));
+        int step = steps[rng.nextInt(steps.length)];
+        if (step != 0) lastDir = step;
+        enc = Math.max(-99, Math.min(99, enc + step));
         total++;
         double r = rng.nextDouble();
         if (r < 0.22) { int i = rng.nextInt(8); pcf[i] = !pcf[i]; }

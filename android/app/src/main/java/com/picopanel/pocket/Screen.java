@@ -36,9 +36,12 @@ public final class Screen {
 
     public void clear() { java.util.Arrays.fill(buf, (byte) 0); }
 
-    public void pixel(int x, int y) {
+    public void pixel(int x, int y) { pixel(x, y, true); }
+
+    public void pixel(int x, int y, boolean on) {
         if (x < 0 || y < 0 || x >= width || y >= height) return;
-        buf[x + (y >> 3) * width] |= (byte) (1 << (y & 7));
+        int i = x + (y >> 3) * width, bit = 1 << (y & 7);
+        if (on) buf[i] |= (byte) bit; else buf[i] &= (byte) ~bit;
     }
 
     public boolean get(int x, int y) {
@@ -46,7 +49,10 @@ public final class Screen {
         return (buf[x + (y >> 3) * width] & (1 << (y & 7))) != 0;
     }
 
-    public void text(int x, int y, String s) {
+    public void text(int x, int y, String s) { text(x, y, s, true, 1); }
+
+    /** Adafruit_GFX's classic 5x7 font: 6px advance per size, y is the glyph top. */
+    public void text(int x, int y, String s, boolean on, int size) {
         String up = s.toUpperCase(java.util.Locale.ROOT);
         for (int i = 0; i < up.length(); i++) {
             int gi = GLYPH_KEYS.indexOf(up.charAt(i));
@@ -54,18 +60,23 @@ public final class Screen {
                 int[] g = GLYPHS[gi];
                 for (int c = 0; c < 5; c++)
                     for (int r = 0; r < 7; r++)
-                        if ((g[c] & (1 << r)) != 0) pixel(x + c, y + r);
+                        if ((g[c] & (1 << r)) != 0)
+                            for (int sx = 0; sx < size; sx++)
+                                for (int sy = 0; sy < size; sy++)
+                                    pixel(x + c * size + sx, y + r * size + sy, on);
             }
-            x += 6;
+            x += 6 * size;
             if (x >= width) break;
         }
     }
 
-    public void rect(int x, int y, int w, int h, boolean fill) {
+    public void rect(int x, int y, int w, int h, boolean fill) { rect(x, y, w, h, fill, true); }
+
+    public void rect(int x, int y, int w, int h, boolean fill, boolean on) {
         for (int dx = 0; dx < w; dx++)
             for (int dy = 0; dy < h; dy++) {
                 boolean edge = dx == 0 || dx == w - 1 || dy == 0 || dy == h - 1;
-                if (fill || edge) pixel(x + dx, y + dy);
+                if (fill || edge) pixel(x + dx, y + dy, on);
             }
     }
 
