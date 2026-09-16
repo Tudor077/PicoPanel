@@ -621,8 +621,171 @@ class CorsaSource(Source):
         sock.close()
 
 
+
+# ---------------------------------------------------------------------
+# War Thunder
+# ---------------------------------------------------------------------
+class WarThunderSource(Source):
+    """Reads the local HTTP telemetry the game serves on port 8111.
+
+    No plugin and no setting: War Thunder starts that server by itself whenever
+    the game runs. Two endpoints matter here:
+
+      /indicators  the instrument panel. Works for ground vehicles AND aircraft,
+                   but with completely different field sets.
+      /state       the flight model. Rich numbers, with units in the key names
+                   ("IAS, km/h"), and only meaningful in an aircraft.
+
+    TANK OR PLANE IS DECIDED FROM THE DATA, not from anything you set. The two
+    field sets barely overlap, so the vehicle gives itself away: an artificial
+    horizon and a variometer mean a cockpit, a gear count and a crew roster mean
+    a turret. Switching vehicle in the game switches the pages on the panel with
+    no help from you.
+
+    A hangar or a menu answers with valid=false, which we treat as "no vehicle"
+    rather than as zeroes - otherwise the panel would show a parked 0 km/h as if
+    you were driving.
+    """
+
+    name = "WarThunder"
+
+    # Fields that only ever appear in a cockpit, and only ever in a hull.
+    AIR_KEYS = ("aviahorizon_pitch", "aviahorizon_roll", "vario",
+                "altitude_10k", "compass")
+    GROUND_KEYS = ("gear_num", "crew_total", "driver_state", "stabilizer",
+                   "driving_direction_mode")
+
+    def __init__(self, base="http://localhost:8111", hz=10):
+        super().__init__()
+        self.base = base.rstrip("/")
+        self.period = 1.0 / hz
+        self.idle_period = 3.0
+
+    # ---------------------------------------------------------------- helpers
+    @staticmethod
+    def classify(ind, state=None):
+        """'air', 'car', or None when no vehicle is in play."""
+        if not isinstance(ind, dict) or not ind.get("valid"):
+            return None
+        if any(k in ind for k in WarThunderSource.AIR_KEYS):
+            return "air"
+        if any(k in ind for k in WarThunderSource.GROUND_KEYS):
+            return "car"
+        # Nothing decisive in the indicators: the flight model only answers
+        # valid for an aircraft, so it breaks the tie.
+        if isinstance(state, dict) and state.get("valid"):
+            return "air"
+        return "car"
+
+    @staticmethod
+    def _f(d, *keys, default=0.0):
+        """First key that is present and numeric. The state endpoint spells its
+        keys with units, and the spelling has changed between patches, so every
+        lookup takes a list of names rather than one."""
+        for k in keys:
+            v = d.get(k)
+            if isinstance(v, (int, float)):
+                return float(v)
+        return default
+
+    @classmethod
+    def decode(cls, ind, state=None, peak_rpm=0.0):
+        kind = cls.classify(ind, state)
+        if kind is None:
+            return None
+        st = state if isinstance(state, dict) else {}
+
+        rpm = cls._f(ind, "rpm") or cls._f(st, "RPM 1", "RPM throttle 1, %")
+        peak = max(peak_rpm, rpm)
+        # War Thunder gives no redline, for either vehicle. We scale to the
+        # highest revs seen, rounded up, and send no redline at all rather than
+        # inventing one - the panel then draws the bar with no red mark.
+        rpm_max = math.ceil(max(peak, 1000.0) / 500.0) * 500.0
+
+        if kind == "car":
+            gear = int(cls._f(ind, "gear"))
+            # driving_direction_mode false means the box is in reverse; the gear
+            # number itself stays positive, so the sign has to come from here.
+            if ind.get("driving_direction_mode") is False and gear != 0:
+                gear = -abs(gear)
+            return Telemetry(
+                src="WarThunder",
+                kind="car",
+                speed_kmh=abs(cls._f(ind, "speed")),
+                rpm=rpm,
+                rpm_max=rpm_max,
+                gear=gear,
+                fuel_pct=-1.0,               # not reported for ground vehicles
+                engine_c=cls._f(ind, "water_temperature", "oil_temperature"),
+                text=str(ind.get("type", ""))[:24],
+            )
+
+        fuel = cls._f(st, "Mfuel, kg")
+        fuel0 = cls._f(st, "Mfuel0, kg")
+        ias = cls._f(st, "IAS, km/h") or cls._f(ind, "speed")
+
+        # The aircraft pages are laid out for aviation units, and War Thunder
+        # answers in metric - so the conversions live here, not on the board.
+        return Telemetry(
+            src="WarThunder",
+            kind="air",
+            speed_kmh=ias,
+            kts=ias / 1.852,
+            alt_ft=cls._f(st, "H, m", default=cls._f(ind, "altitude_hour")) * 3.28084,
+            vspeed_fpm=cls._f(st, "Vy, m/s", default=cls._f(ind, "vario")) * 196.85,
+            hdg=cls._f(ind, "compass"),
+            rpm=rpm,
+            rpm_max=rpm_max,
+            gear=0,
+            fuel_pct=(fuel / fuel0 * 100.0) if fuel0 else -1.0,
+            throttle=cls._f(st, "throttle 1, %") / 100.0,
+            engine_c=cls._f(st, "water temp 1, C", default=cls._f(ind, "water_temperature")),
+            # No radios, transponder or autopilot exist in the game, so those
+            # pages would be blank. We put the numbers a pilot actually watches
+            # there instead.
+            ap_text="G %.1f AoA %.0f" % (cls._f(st, "Ny"), cls._f(st, "AoA, deg")),
+            text=str(ind.get("type", ""))[:24],
+        )
+
+    def _get(self, path):
+        with urllib.request.urlopen(self.base + path, timeout=1.0) as r:
+            return json.loads(r.read())
+
+    def _run(self):
+        self.status = "polling " + self.base
+        wait = self.idle_period
+        peak = 0.0
+        last_kind = None
+        while not self._stop.is_set():
+            try:
+                ind = self._get("/indicators")
+                kind = self.classify(ind)
+                # /state is only worth a round trip in an aircraft.
+                st = self._get("/state") if kind != "car" else None
+                tel = self.decode(ind, st, peak)
+                wait = self.period
+                if tel is None:
+                    self.status = "game running, no vehicle (hangar?)"
+                else:
+                    peak = max(peak, tel.rpm)
+                    if tel.kind != last_kind:
+                        last_kind = tel.kind
+                        peak = tel.rpm          # new vehicle, new rev range
+                        self.status = "%s: %s" % (
+                            "aircraft" if tel.kind == "air" else "ground vehicle",
+                            tel.text or "?")
+                    self._put(tel)
+            except (urllib.error.URLError, OSError, json.JSONDecodeError,
+                    TimeoutError, ValueError):
+                wait = self.idle_period      # not running: stop hammering it
+                self.status = "not running"
+                last_kind = None
+            self._stop.wait(wait)
+
+
 ALL = {
     "outgauge": OutGaugeSource,
+    "warthunder": WarThunderSource,
     "corsa": CorsaSource,
     "ets2": Ets2HttpSource,
     "msfs": MsfsSource,
