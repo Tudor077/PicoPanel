@@ -135,6 +135,9 @@
 // While game telemetry is flowing the screen never sleeps. Set this to 0 if
 // you want it to sleep anyway.
 #define OLED_AWAKE_ON_GAME       1
+// First step of going idle: the header retracts and the content moves up into
+// its place. Then comes dimming, then the panel switches off entirely.
+#define OLED_RETRACT_MS     5000UL
 
 // --------------------------------------------------------------- config ----
 #define DEBOUNCE_MS       12    // button debounce
@@ -1519,6 +1522,13 @@ static bool gameFresh() {
    change the page. Otherwise you'd lose the page you were on every time.
    -------------------------------------------------------------------------- */
 uint8_t  oledSleep = 0;        // 0 = awake, 1 = dimmed, 2 = off
+
+// Top edge of the content area. FIXED: only the header animates, the pages
+// stay exactly where they are. Sliding the content up as well was tried and
+// undone - everything jumped at once and you lost your place on the page.
+// It stays a named origin rather than a scattered literal 11 so the layouts
+// read as "first row, second row" instead of magic numbers.
+const uint8_t gTop = 10;
 uint32_t tLastAct  = 0;
 
 // Called from core0 (a button, activity, serial). It does NOT touch the bus: it
@@ -1555,7 +1565,11 @@ void oledSleepService() {
   // When the game stops, telemetry goes stale after GAME_STALE_MS and the usual
   // countdown starts from there.
   if (gameFresh()) {
-    oledWake();
+    // Keep the panel lit, but do NOT touch tLastAct. That clock measures YOUR
+    // activity, and the header retract reads the same clock - telemetry
+    // resetting it sixty times a second would pin the header open for the
+    // whole drive. Only the sleep state is held back here.
+    if (oledSleep != 0) oledWakeReq = true;
     return;
   }
 #endif
@@ -1737,11 +1751,15 @@ void drawHid() {
 #endif
 }
 
-void header() {
-  oled->fillRect(0, 0, SCREEN_W, 9, SSD1306_WHITE);
+// shift = how far the bar has already slid up, 0 (fully shown) to 9 (gone).
+// The bar shrinks and the text walks off the top edge; GFX clips whatever ends
+// up above y=0, so we can just draw at negative coordinates.
+void header(int shift) {
+  int h = 9 - shift;
+  if (h > 0) oled->fillRect(0, 0, SCREEN_W, h, SSD1306_WHITE);
   oled->setTextSize(1);            // never inherited from the previous page
   oled->setTextColor(SSD1306_BLACK);
-  oled->setCursor(2, 1);
+  oled->setCursor(2, 1 - shift);
   oled->print(PAGE_NAME[page]);
   // The latched layer shows in the header on every page: if it stays on and you
   // can't see it, you press a button and wonder why it skipped a track.
@@ -1761,7 +1779,7 @@ void header() {
   char buf[16];
   snprintf(buf, sizeof(buf), "%s%s%u/%u", hidMark, mediaLayer ? "M " : "",
            cur, tot);
-  oled->setCursor(SCREEN_W - 2 - 6 * (int)strlen(buf), 1);
+  oled->setCursor(SCREEN_W - 2 - 6 * (int)strlen(buf), 1 - shift);
   oled->print(buf);
   oled->setTextColor(SSD1306_WHITE);
 }
@@ -1784,13 +1802,13 @@ void drawBtnRow(int y) {
 }
 
 void drawOverview() {
-  oled->setCursor(0, 11);
+  oled->setCursor(0, gTop + 1);
   oled->print(F("S2:"));
   if (sw2.pos) oled->print(sw2.pos); else oled->print('?');
   oled->print(F(" S3:"));
   if (sw3.pos) oled->print(sw3.pos); else oled->print('?');
   oled->print(F(" E:"));  oled->print(encValue);
-  drawBtnRow(21);
+  drawBtnRow(gTop + 11);
 }
 
 void drawSwRow(SwGroup &g, int y) {
@@ -1820,11 +1838,11 @@ void drawEnc() {
   char v[8];
   snprintf(v, sizeof(v), "%ld", (long)encValue);
   oled->setTextSize(2);
-  oled->setCursor(2, 13);
+  oled->setCursor(2, gTop + 3);
   oled->print(v);
   oled->setTextSize(1);
 
-  oled->setCursor(60, 12);
+  oled->setCursor(60, gTop + 2);
   oled->print(F("A"));  oled->print(digitalRead(PIN_ENC_A));
   oled->print(F(" B")); oled->print(digitalRead(PIN_ENC_B));
   oled->print(' ');
@@ -1832,7 +1850,7 @@ void drawEnc() {
   else if (encDir < 0) oled->print(F("CCW"));
   else                 oled->print(F("--"));
 
-  oled->setCursor(60, 22);
+  oled->setCursor(60, gTop + 12);
   oled->print(F("m"));  oled->print(encMode);
   oled->print('/');     oled->print(encLastBurst);
   oled->print(F(" e")); oled->print(encErrors);
@@ -1840,16 +1858,16 @@ void drawEnc() {
 }
 
 void drawBtnPage() {
-  drawBtnRow(11);
-  oled->setCursor(0, 24);
+  drawBtnRow(gTop + 1);
+  oled->setCursor(0, gTop + 14);
   for (uint8_t i = 0; i < B_COUNT; i++) { oled->print(btn[i].count); oled->print(' '); }
 }
 
 void drawPcf() {
   if (!pcfOK) {
-    oled->setCursor(0, 13);
+    oled->setCursor(0, gTop + 3);
     oled->print(F("None on 0x20-0x27"));
-    oled->setCursor(0, 23);
+    oled->setCursor(0, gTop + 13);
     oled->print(F("'i' = try again"));
     return;
   }
@@ -1857,17 +1875,17 @@ void drawPcf() {
   for (uint8_t i = 0; i < 8; i++) {
     int x = i * 16;
     if (pcfBtn[i].level) {
-      oled->fillRect(x, 11, w, h, SSD1306_WHITE);
+      oled->fillRect(x, gTop + 1, w, h, SSD1306_WHITE);
       oled->setTextColor(SSD1306_BLACK);
     } else {
-      oled->drawRect(x, 11, w, h, SSD1306_WHITE);
+      oled->drawRect(x, gTop + 1, w, h, SSD1306_WHITE);
       oled->setTextColor(SSD1306_WHITE);
     }
-    oled->setCursor(x + 5, 13);
+    oled->setCursor(x + 5, gTop + 3);
     oled->print(i + 1);
     oled->setTextColor(SSD1306_WHITE);
   }
-  oled->setCursor(0, 23);
+  oled->setCursor(0, gTop + 13);
   oled->print(F("0x"));   oled->print(pcfAddr, HEX);
   oled->print(F(" raw 0x"));
   if (pcfRaw < 16) oled->print('0');
@@ -1876,10 +1894,10 @@ void drawPcf() {
 }
 
 void drawI2C() {
-  oled->setCursor(0, 11);
+  oled->setCursor(0, gTop + 1);
   oled->print(F("Found: ")); oled->print(i2cCount);
   oled->print(F(" @"));       oled->print(i2cHz / 1000); oled->print(F("k"));
-  oled->setCursor(0, 21);
+  oled->setCursor(0, gTop + 11);
   for (uint8_t i = 0; i < i2cCount && i < 6; i++) {
     oled->print(F("0x"));
     if (i2cFound[i] < 16) oled->print('0');
@@ -1890,13 +1908,13 @@ void drawI2C() {
 
 void drawInfo() {
   uint32_t s = millis() / 1000;
-  oled->setCursor(0, 11);
+  oled->setCursor(0, gTop + 1);
   oled->print(s / 3600); oled->print(':');
   if ((s / 60) % 60 < 10) oled->print('0'); oled->print((s / 60) % 60); oled->print(':');
   if (s % 60 < 10) oled->print('0'); oled->print(s % 60);
   oled->print(F("  fps ")); oled->print(fps);
 
-  oled->setCursor(0, 21);
+  oled->setCursor(0, gTop + 11);
   oled->print(F("0x"));    oled->print(oledAddr, HEX);
   oled->print(F(" 128x")); oled->print(oledH);
   oled->print(' ');        oled->print(F(CORE_NAME));
@@ -1968,9 +1986,9 @@ static void halftoneRect(int x, int y, int w, int h, uint8_t level, int cell = 4
 // it blinks on the screen by itself.
 static void blinkArrow(bool left, bool on) {
   if (!on) return;
-  if (left) oled->fillTriangle(0, 17, 8, 11, 8, 23, SSD1306_WHITE);
-  else      oled->fillTriangle(SCREEN_W - 1, 17, SCREEN_W - 9, 11,
-                               SCREEN_W - 9, 23, SSD1306_WHITE);
+  if (left) oled->fillTriangle(0, gTop + 7, 8, gTop + 1, 8, gTop + 13, SSD1306_WHITE);
+  else      oled->fillTriangle(SCREEN_W - 1, gTop + 7, SCREEN_W - 9, gTop + 1,
+                               SCREEN_W - 9, gTop + 13, SSD1306_WHITE);
 }
 
 static void drawRpmBar(int y) {
@@ -2004,47 +2022,47 @@ static void drawCarPage() {
       blinkArrow(false, gameBlink & 2);
 
       oled->setTextSize(2);
-      oled->setCursor(11, 11);
+      oled->setCursor(11, gTop + 1);
       oled->print(gameSpd);
 
       oled->setTextSize(1);
-      oled->setCursor(11 + 36, 18);
+      oled->setCursor(11 + 36, gTop + 8);
       oled->print(F("km/h"));
 
       oled->setTextSize(2);
-      oled->setCursor(98, 11);
+      oled->setCursor(98, gTop + 1);
       if      (gameGear  < 0) oled->print('R');
       else if (gameGear == 0) oled->print('N');
       else if (gameGear < 10) oled->print(gameGear);
-      else { oled->setTextSize(1); oled->setCursor(98, 15); oled->print(gameGear); }
+      else { oled->setTextSize(1); oled->setCursor(98, gTop + 5); oled->print(gameGear); }
 
       drawRpmBar((oledH >= 64) ? 44 : 26);
       break;
     }
     case 1:
       oled->setTextSize(1);
-      oled->setCursor(0, 11);
+      oled->setCursor(0, gTop + 1);
       oled->print(F("FUEL "));
       if (gameFuel >= 0) { oled->print(gameFuel); oled->print('%'); } else oled->print('?');
-      oled->setCursor(68, 11);
+      oled->setCursor(68, gTop + 1);
       oled->print(F("TEMP "));
       if (gameTmp) { oled->print(gameTmp); oled->print('C'); } else oled->print('?');
 
-      oled->setCursor(0, 21);
+      oled->setCursor(0, gTop + 11);
       oled->print(F("TURBO "));
       oled->print(gameTurbo / 10); oled->print('.'); oled->print(gameTurbo % 10);
       oled->print('b');
-      oled->setCursor(68, 21);
+      oled->setCursor(68, gTop + 11);
       oled->print(F("RPM ")); oled->print(gameRpm);
       break;
     default:
       oled->setTextSize(1);
-      oled->setCursor(0, 11);
+      oled->setCursor(0, gTop + 1);
       oled->print(F("THR ")); oled->print(gameThr); oled->print('%');
-      oled->setCursor(56, 11);
+      oled->setCursor(56, gTop + 1);
       oled->print(F("BRAKE ")); oled->print(gameBrk); oled->print('%');
 
-      oled->setCursor(0, 21);
+      oled->setCursor(0, gTop + 11);
       if (gameRedline > 0) { oled->print(F("REDLINE ")); oled->print(gameRedline); }
       else                   oled->print(F("redline not learned"));
       break;
@@ -2058,40 +2076,40 @@ static void drawAirPage() {
     case 0:
       // The order asked for: airspeed, vertical speed, altitude.
       oled->setTextSize(2);
-      oled->setCursor(0, 11);
+      oled->setCursor(0, gTop + 1);
       oled->print(gameKts);
       oled->setTextSize(1);
       oled->print(F("kt"));
 
-      oled->setCursor(62, 11);
+      oled->setCursor(62, gTop + 1);
       oled->print(F("VS "));
       if (gameVs > 0) oled->print('+');
       oled->print(gameVs);
 
-      oled->setCursor(62, 21);
+      oled->setCursor(62, gTop + 11);
       oled->print(F("ALT ")); oled->print(gameAltFt);
       break;
     case 1:
-      oled->setCursor(0, 11);
+      oled->setCursor(0, gTop + 1);
       oled->print(F("COM1 ")); oled->print(gameC1[0] ? gameC1 : "---");
-      oled->setCursor(0, 21);
+      oled->setCursor(0, gTop + 11);
       oled->print(F("COM2 ")); oled->print(gameC2[0] ? gameC2 : "---");
-      if (gameSqk[0]) { oled->setCursor(92, 21); oled->print(gameSqk); }
+      if (gameSqk[0]) { oled->setCursor(92, gTop + 11); oled->print(gameSqk); }
       break;
     case 2:
       oled->setTextSize(2);
-      oled->setCursor(0, 11);
+      oled->setCursor(0, gTop + 1);
       oled->print(gameSqk[0] ? gameSqk : "----");
       oled->setTextSize(1);
-      oled->setCursor(62, 11);
+      oled->setCursor(62, gTop + 1);
       if (gameHdg >= 0) { oled->print(F("HDG ")); oled->print(gameHdg); }
-      oled->setCursor(62, 21);
+      oled->setCursor(62, gTop + 11);
       oled->print(F("ALT ")); oled->print(gameAltFt);
       break;
     default:
-      oled->setCursor(0, 11);
+      oled->setCursor(0, gTop + 1);
       oled->print(F("AUTOPILOT"));
-      oled->setCursor(0, 21);
+      oled->setCursor(0, gTop + 11);
       oled->print(gameAp[0] ? gameAp : "off");
       break;
   }
@@ -2099,9 +2117,9 @@ static void drawAirPage() {
 
 void drawGame() {
   if (!gameFresh()) {
-    oled->setCursor(0, 13);
+    oled->setCursor(0, gTop + 3);
     oled->print(F("no game"));
-    oled->setCursor(0, 23);
+    oled->setCursor(0, gTop + 13);
     oled->print(F("waiting for serial"));
     return;
   }
@@ -2256,7 +2274,28 @@ void render() {
   // gear under 10 it drew big, and the title grew along with it.
   oled->setTextSize(1);
   oled->setTextColor(SSD1306_WHITE);
-  header();
+
+  // The header retracts after OLED_RETRACT_MS of quiet and the content moves up
+  // into its place. On 128x32 that bar is 9 of 32 pixels - most of a third of
+  // the screen spent on a title you already know.
+  //
+  // It stays while game telemetry is flowing: there the header carries the
+  // source and the sub-page, which is exactly what you want while driving.
+  // This applies in game mode too: while driving you aren't pressing anything,
+  // so after OLED_RETRACT_MS the header goes and the gauges get the whole
+  // screen. Press USER and it comes back for another five seconds, with the
+  // sub-page counter, which is when you actually want to read it.
+  // Only the bar slides, and it slides one pixel per frame - the 9 px trip
+  // takes about a quarter of a second at 40 FPS. Frame-based rather than
+  // time-based on purpose: the travel is then the same handful of frames
+  // whatever the refresh rate, and it never jumps two pixels because a frame
+  // ran late. The content below does not move.
+  static uint8_t hdrShift = 0;                 // 0 = fully shown, 9 = gone
+  uint8_t target = ((millis() - tLastAct) < OLED_RETRACT_MS) ? 0 : 9;
+  if      (hdrShift < target) hdrShift++;
+  else if (hdrShift > target) hdrShift--;
+
+  if (hdrShift < 9) header(hdrShift);
   switch (page) {
     case P_OVERVIEW: drawOverview(); break;
     case P_SW:       drawSwPage();   break;
