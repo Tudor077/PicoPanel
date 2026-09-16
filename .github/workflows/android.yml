@@ -31,9 +31,19 @@ jobs:
 
       - name: Set up the Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default package list includes the long-obsolete 'tools'
+          # package, which cmdline-tools 16 no longer serves - sdkmanager exits 1
+          # on "Failed to find package 'tools'". We need none of them: AGP pulls
+          # the platform and build-tools it wants by itself.
+          packages: ''
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          # Pinned rather than taking whatever the runner image ships: AGP 8.5.2
+          # requires Gradle 8.7 or newer, and there is no wrapper in the repo.
+          gradle-version: '8.14.3'
 
       - name: Build the debug APK
         working-directory: android
