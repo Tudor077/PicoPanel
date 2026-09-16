@@ -63,6 +63,9 @@ def main():
         "--hidden-import", "win32com.client",
         "--hidden-import", "serial.tools.list_ports",
         "--hidden-import", "serial.serialwin32",
+        # Imported inside Link.connect(), only when you pick the emulator
+        # port. Named explicitly so the exe can never ship without it.
+        "--hidden-import", "fakepanel",
         os.path.join(HERE, "panel.py"),
     ]
     print(" ".join(cmd), "\n")
