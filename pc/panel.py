@@ -296,7 +296,9 @@ class App(tk.Tk):
         # reader thread always has somewhere to hand its requests.
         self.audio = audio.AudioBridge(
             send=lambda line: self.link.send(line, echo=False),
-            log=lambda msg: self.q.put(("err", msg)))
+            log=lambda msg: self.q.put(("err", msg)),
+            selected=self.cfg.get("audio_target"),
+            on_select=self._remember_audio_target)
         self.link = Link(self.q, on_audio=self.audio.request)
         self.hub = Hub()
         self.hub.yield_outgauge = bool(self.cfg.get("yield_outgauge"))
@@ -515,6 +517,18 @@ class App(tk.Tk):
             self.withdraw()
         else:
             self._quit()
+
+    def _remember_audio_target(self, label):
+        """Called from the audio thread when you pick a different app.
+
+        Saved so the choice survives a restart: hunting back down the list to
+        Spotify every time you open the app would make the feature not worth
+        using.
+        """
+        if self.cfg.get("audio_target") == label:
+            return
+        self.cfg["audio_target"] = label
+        settings.save(self.cfg)
 
     def _quit(self):
         self._stop_send.set()

@@ -52,6 +52,11 @@ layer (double-tap USER) with HID armed, and:
 The selected app and its level show on the panel's HID page, and in the status
 line as `AU=Spotify:68`.
 
+**You usually don't have to select anything.** Until you press one of those
+buttons, the knob follows whatever is playing - open Spotify and the knob is on
+Spotify. The moment you do pick one, the choice is yours and is remembered
+across restarts, in `%LOCALAPPDATA%\PicoPanel\settings.json`.
+
 ### What "YouTube" means here
 
 Windows has no volume for a web site. It has one mixer channel per *process* -

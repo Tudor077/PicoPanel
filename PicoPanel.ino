@@ -2011,12 +2011,17 @@ void drawMusic() {
 
 void drawHid() {
 #if HID_AVAILABLE
+  // Cut, don't fold. "ARMED MEDIA  SW1=1 SW2=?" is 144 px wide on a 128 px
+  // screen, and with wrapping on the tail landed on the line below - on top of
+  // the volume target. Shorter labels so it fits, and no wrapping so a future
+  // long line is merely clipped instead of wrecking the row under it.
+  oled->setTextWrap(false);
   oled->setCursor(0, 11);
-  oled->print(hidArmed ? F("ARMED") : F("off"));
+  oled->print(hidArmed ? F("ARM") : F("off"));
   if (mediaLayer) oled->print(F(" MEDIA"));
-  oled->print(F("  SW1="));
+  oled->print(F(" S1="));
   if (sw2.pos) oled->print(sw2.pos); else oled->print('?');
-  oled->print(F(" SW2="));
+  oled->print(F(" S2="));
   if (sw3.pos) oled->print(sw3.pos); else oled->print('?');
   // The last action and its counter were taken out of here: with nothing pressed
   // they read "- n=0", permanent noise for rarely useful information. They're
@@ -2049,6 +2054,7 @@ void drawHid() {
       if (fill > 0) oled->fillRect(bx + 1, 22, fill, 6, SSD1306_WHITE);
     }
   }
+  oled->setTextWrap(true);              // as every other page expects it
 #else
   oled->setCursor(0, 11); oled->print(F("HID unavailable"));
   oled->setCursor(0, 21); oled->print(F("(Mbed core)"));

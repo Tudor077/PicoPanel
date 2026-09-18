@@ -337,11 +337,16 @@ class AudioBridge:
     one that did nothing.
     """
 
-    def __init__(self, send, log=None):
+    def __init__(self, send, log=None, selected=None, on_select=None):
         self.send = send                # send(str) -> writes a line to the board
         self.log = log or (lambda *_: None)
         self.mixer = Mixer()
-        self.selected = "Windows"       # the label, not the index
+        # None means "nobody has chosen yet", and that is not the same as
+        # Windows: until you pick one, the knob follows whatever is actually
+        # playing, so opening Spotify puts the knob on Spotify. The moment you
+        # press a button the choice becomes yours and is remembered.
+        self.selected = selected
+        self.on_select = on_select or (lambda _label: None)
         # What's playing rides the same heartbeat: same thread, same link, and
         # the panel's MUSIC page is never more than half a second behind.
         try:
@@ -378,21 +383,46 @@ class AudioBridge:
         self._q.put(int(code))
 
     # -- the work ---------------------------------------------------------
+    def _playing_index(self):
+        """The mixer target of whatever is playing, if we can tell."""
+        snap = self.now.snapshot() if self.now else None
+        if not snap:
+            return None
+        # A browser's media session is named after the browser's package, which
+        # looks nothing like its process. Its label is the way across.
+        if snap.get("label") == "YouTube":
+            i = self.mixer.index_of("YouTube")
+            if i is not None:
+                return i
+        app = (snap.get("app") or "").lower()
+        if app:
+            i = self.mixer.index_of(app)
+            if i is not None:
+                return i
+        return None
+
     def _index(self):
-        """Where the remembered target sits right now, 0 if it has gone."""
+        """Where the target sits right now, 0 if it has gone."""
+        if self.selected is None:
+            i = self._playing_index()
+            return 0 if i is None else i
         i = self.mixer.index_of(self.selected)
         return 0 if i is None else i
+
+    def _pick(self, label):
+        self.selected = label
+        self.on_select(label)
 
     def _move(self, by):
         ts = self.mixer.targets()
         if not ts:
             return
         i = (self._index() + by) % len(ts)
-        self.selected = ts[i].label
+        self._pick(ts[i].label)
 
     def _apply(self, code):
         if code == APP_HOME:
-            self.selected = "Windows"
+            self._pick("Windows")
         elif code == APP_PREV:
             self._move(-1)
         elif code == APP_NEXT:

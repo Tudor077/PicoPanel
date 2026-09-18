@@ -13,6 +13,11 @@ DEFAULTS = {
     # else - in practice to CorsaConnect, which wants it anyway. Telemetry then
     # comes from its mirror, on 5051, already enriched.
     "yield_outgauge": False,
+
+    # Which app the volume knob points at, by the name shown on the panel.
+    # None means nobody has chosen: the knob then follows whatever is playing,
+    # so opening Spotify puts it on Spotify without a single button press.
+    "audio_target": None,
 }
 
 
