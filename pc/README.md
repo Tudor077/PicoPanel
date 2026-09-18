@@ -56,7 +56,10 @@ qualify:
 * the **MUSIC** page, and
 * the **last sub-page of GAME**, which exists so that with HID armed in a game,
   where USER walks the game's own sub-pages and nothing else, the volume is
-  still one button away.
+  still one button away. With no game sending anything, that page says `no game`
+  and one press of USER still reaches the volume - without this the knob looked
+  broken, because on the GAME page with no telemetry there was no volume
+  sub-page at all and the knob stayed a gamepad button.
 
 Anywhere else the buttons and the knob go back to being whatever they normally
 are, and the media layer's `^B1..^B4` still work as before.

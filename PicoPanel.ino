@@ -1603,7 +1603,15 @@ static uint8_t gameSubCount() {
 
 // Is the LAST sub-page - the volume one - the one being shown?
 static bool gameAudioSub() {
-  return gameFresh() && gameSub == (uint8_t)(gameSubCount() - 1);
+  // With a game sending, the volume is the last of its sub-pages. With NOTHING
+  // sending, the page says "no game" and has only one other thing worth
+  // showing, so the volume is sub-page 1.
+  //
+  // This case was missing and it made the knob look broken: on the GAME page
+  // with no telemetry there was no volume sub-page at all, so the knob stayed a
+  // gamepad button and turning it did nothing you could hear.
+  if (!gameFresh()) return gameSub == 1;
+  return gameSub == (uint8_t)(gameSubCount() - 1);
 }
 uint32_t gameSeen     = 0;      // millis at the last line received
 uint32_t gameLines    = 0;
@@ -2017,6 +2025,13 @@ void usrUpdate() {
     gameSub = (uint8_t)((gameSub + 1) % gameSubCount());
     return;
   }
+  // No game, but still on its page: one press shows the volume, the next moves
+  // on. Without this the volume was two pages away and nothing said so.
+  if (hidArmed && page == P_GAME && gameSub == 0) {
+    gameSub = 1;
+    return;
+  }
+  gameSub = 0;
 #endif
   page = (uint8_t)((page + 1) % P_COUNT);
 }
@@ -2744,10 +2759,11 @@ static void drawWtGndPage() {
 
 void drawGame() {
   if (!gameFresh()) {
-    oled->setCursor(0, gTop + 3);
+    if (gameAudioSub()) { drawAudioPicker(); return; }
+    oled->setCursor(0, gTop + 2);
     oled->print(F("no game"));
-    oled->setCursor(0, gTop + 13);
-    oled->print(F("waiting for serial"));
+    oled->setCursor(0, gTop + 12);
+    oled->print(F("USER = volume"));
     return;
   }
 
