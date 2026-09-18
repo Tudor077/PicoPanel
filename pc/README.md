@@ -67,6 +67,23 @@ are, and the media layer's `^B1..^B4` still work as before.
 The selected app and its level show on both those pages and on the HID page, and
 in the status line as `AU=Spotify:68`.
 
+### When the knob "does nothing"
+
+It is almost always because the knob is not the volume at that moment - on an
+ordinary page with HID armed it is gamepad button 17/18, as it should be. The
+status line says which, so there is no need to guess:
+
+```
+PG=1.0 M=0 KNOB=pad      the GAME page, no media layer: a gamepad button
+PG=2.0 M=0 KNOB=vol      the MUSIC page: the volume
+PG=1.1 M=0 KNOB=vol      the GAME page's volume sub-page
+PG=5.0 M=1 KNOB=vol      anywhere, with the media layer latched on
+```
+
+`PG` is the page and its sub-page, `M` the latched media layer. The route that
+does not depend on the page at all is the media layer: tap USER twice and the
+knob is the volume wherever you are.
+
 `Spotify 5/6` means Spotify is the fifth of six things the knob can point at.
 The list is `Windows` - the master - followed by every application that
 currently has a channel, in alphabetical order. The number is there so you know
@@ -77,12 +94,16 @@ buttons, the knob follows whatever is playing - open Spotify and the knob is on
 Spotify. The moment you do pick one, the choice is yours and is remembered
 across restarts, in `%LOCALAPPDATA%\PicoPanel\settings.json`.
 
-### The app's own slider, not the mixer channel
+### Which volume actually moves
 
-Where an app publishes its own volume control, that is what moves - the slider
-you can see inside Spotify, not a second attenuation stacked behind it. The
-panel says `mix` after the level when it had to fall back to the mixer channel,
-and says nothing when it is the app's own.
+The app's channel in the Windows mixer, by default. That is a real
+per-application volume - set Spotify to 45% and Windows, BeamNG, Discord and
+Steam all stay at 100 - and it never reaches into another program's window.
+
+**Move the app's own volume slider** switches to the slider inside the app
+instead, where it has one, and the panel then says `app` after the level. It
+works and it is verified; it is off by default because it is the more
+complicated of the two and the simple one is enough.
 
 How: Chromium publishes an accessibility tree, and Spotify's slider is in it as
 `Change volume` with a RangeValue pattern. Setting it needs no focus change and

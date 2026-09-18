@@ -2183,10 +2183,10 @@ static void drawAudioLine(int16_t x, int16_t y, bool withIndex) {
     oled->print(' ');
     if (audMute)          oled->print(F(" MUTE"));
     else if (audVol >= 0) { oled->print(' '); oled->print(audVol); oled->print('%'); }
-    // Only worth saying when it is NOT the app's own slider - and never for
-    // Windows, which is the mixer by definition. Silence means "the slider you
-    // can see in the app is the one moving".
-    if (audSrc == 'm' && audIdx != 1 && !audMute) oled->print(F(" mix"));
+    // The mixer channel is the ordinary way now, so it says nothing. The
+    // marker is for the other case: the app's OWN slider, the one you can
+    // watch move inside Spotify.
+    if (audSrc == 'a' && !audMute) oled->print(F(" app"));
   }
   oled->setTextWrap(true);
 }
@@ -3647,7 +3647,16 @@ void serialReport() {
     Serial.print(F(" PCF="));
     for (uint8_t i = 0; i < 8; i++) Serial.print(pcfBtn[i].level ? '1' : '0');
   }
+  // The page AND its sub-page, plus the latched layer. Which of the three the
+  // knob obeys is exactly what you cannot tell by looking at the panel, and it
+  // is the first thing to ask when the knob "does nothing".
   Serial.print(F(" PG=")); Serial.print(page);
+  Serial.print('.'); Serial.print(gameSub);
+  Serial.print(F(" M=")); Serial.print(mediaLayer ? '1' : '0');
+  Serial.print(F(" KNOB="));
+  if (audioPage())      Serial.print(F("vol"));
+  else if (mediaLayer)  Serial.print(F("vol"));
+  else                  Serial.print(F("pad"));
   Serial.print(F(" GM=")); Serial.print(gameFresh() ? gameSrc : "-");
   Serial.print(F(" GL=")); Serial.print(gameLines);   // lines received, total
   // Which app the knob would move, so you can tell from here whether the PC

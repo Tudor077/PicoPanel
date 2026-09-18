@@ -24,10 +24,14 @@ DEFAULTS = {
     # font, with anything else spelled out in Latin letters.
     "unicode_titles": True,
 
-    # True: move the slider inside the app where it has one - Spotify's own.
-    # False: only ever the app's channel in the Windows mixer, which never
-    # reaches into another program's window at all.
-    "app_own_volume": True,
+    # False: the app's channel in the Windows mixer, always. That is a real
+    # per-application volume - Spotify moves, nothing else does - and it never
+    # reaches into another program's window.
+    #
+    # True moves the slider inside the app instead, where it has one. It works,
+    # but it is the more complicated of the two and it is off by choice, not
+    # because it failed. The checkbox in the app turns it back on.
+    "app_own_volume": False,
 }
 
 
