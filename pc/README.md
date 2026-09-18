@@ -262,12 +262,21 @@ past on the way round - the words and the track are the same subject. USER
 alternates the two while you are on MUSIC, armed or not, and the header counts
 them: `MUSIC 2/2`.
 
-The line being sung is **inverted** - a white band with the words cut out of it
-- and the one coming is plain below it. The first attempt drew the next line at
-half density on the Bayer grid, and it was unreadable for a reason worth
-remembering: the progress bar's background uses that same grid, so the faint
-text and the faint bar merged into one field of dots. At seven pixels tall there
-is no room to throw half of them away anyway.
+A white band sits at a fixed height and the words slide up through it: the line
+being sung is black inside the band, the one coming is plain below. When the
+line turns over, both climb by ten pixels over a quarter of a second - the rate
+the header retracts at - and the next line arrives in the band.
+
+The band belongs to the PAGE, not to a line. Attaching it to a line was tried
+and it has to jump from one to the other at some point in the slide, and there
+is no point in the slide where that doesn't flash.
+
+Two earlier attempts are worth recording. The next line drawn at half density on
+the Bayer grid was unreadable, because the progress bar's background used that
+same grid - the faint text and the faint bar merged into one field of dots, and
+at seven pixels tall there is no room to throw half of them away anyway. And
+there is no progress bar here at all now: it was two lines of words competing
+with a third thing for twenty-two rows.
 
 Both lines are rendered here with a real font and sent as pixels, like the
 titles, so a Russian song is a Russian song.

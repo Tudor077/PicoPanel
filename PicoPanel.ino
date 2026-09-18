@@ -343,6 +343,19 @@ int32_t  lyrNextAt = 0;
 uint32_t lyrSeen = 0;
 #define LYR_STALE_MS 8000UL
 
+/* The line on its way out, kept so it can be seen leaving.
+
+   It has to be a copy: the moment the line turns over, the PC sends a fresh
+   pair and what used to be the current line is overwritten. Without this the
+   old words would vanish on the frame the new ones appeared, which is the jump
+   the slide exists to remove. */
+uint8_t  lyrOutBmp[LYR_BMP_MAX];
+uint16_t lyrOutW   = 0;
+uint32_t lyrSlideAt = 0;
+// Ten pixels in a quarter of a second, the same rate the header retracts at.
+// Fast enough not to lag the song, slow enough to read as movement.
+#define LYR_SLIDE_MS 250UL
+
 #define NP_BMP_MAX 250
 uint8_t  npTitleBmp[NP_BMP_MAX];
 uint16_t npTitleW    = 0;
@@ -2160,13 +2173,17 @@ static const uint8_t BAYER4[16] = {
 */
 static void drawStrip(const uint8_t *bmp, uint16_t w,
                       int16_t x, int16_t y, int16_t win, uint8_t slot,
-                      bool invert = false) {
+                      int16_t bandTop = -32000, int16_t clipTop = -32000) {
   // Inverted: a white band with the words cut out of it. This replaced drawing
   // the line at half density on the Bayer grid, which was unreadable for a
   // reason worth remembering - the progress bar's background uses that SAME
   // grid, so the faint text and the faint bar merged into one field of dots.
   // At seven pixels tall there is no room to throw half of them away anyway.
-  if (invert) oled->fillRect(x, y, win, 8, SSD1306_WHITE);
+  // bandTop is where the white highlight sits. It belongs to the PAGE, not to
+  // any line: the caller paints it once and the lines slide THROUGH it, black
+  // inside and white outside. Attaching it to a line instead meant it had to
+  // jump from one to the other at some point in the slide, and there is no
+  // point in the slide where that doesn't flash.
   if (!w) return;
   const int16_t GAP = 18;
   const uint32_t LEAD = 1200, PXMS = 28;
@@ -2190,7 +2207,10 @@ static void drawStrip(const uint8_t *bmp, uint16_t w,
     if (!col) continue;
     for (uint8_t r = 0; r < 8; r++) {
       if (!(col & (1 << r))) continue;
-      oled->drawPixel(x + sx, y + r, invert ? SSD1306_BLACK : SSD1306_WHITE);
+      int16_t py = y + r;
+      if (py < clipTop) continue;
+      bool inBand = (py >= bandTop && py < bandTop + 8);
+      oled->drawPixel(x + sx, py, inBand ? SSD1306_BLACK : SSD1306_WHITE);
     }
   }
 }
@@ -2309,23 +2329,41 @@ void drawKaraoke() {
   int32_t now = npNowMs();
   bool    turned = (lyrNextW && now >= lyrNextAt);
 
-  const uint8_t *cur = turned ? lyrNextBmp : lyrCurBmp;
-  uint16_t       curW = turned ? lyrNextW  : lyrCurW;
-
-  // The line being sung is inverted, the one coming is plain. Which is which
-  // has to be readable at a glance, and on this screen a white band is the only
-  // emphasis there is.
-  if (curW) {
-    drawStrip(cur, curW, 0, gTop + 1, SCREEN_W, 4, true);
-  } else {
-    oled->fillRect(0, gTop + 1, SCREEN_W, 8, SSD1306_WHITE);   // the gap
+  // The moment it turns over, keep a copy of the words that are leaving and
+  // start the clock. Everything below is then just where to put them.
+  static bool wasTurned = false;
+  if (turned && !wasTurned) {
+    uint16_t n = (lyrCurW < LYR_BMP_MAX) ? lyrCurW : LYR_BMP_MAX;
+    memcpy(lyrOutBmp, lyrCurBmp, n);
+    lyrOutW = n;
+    lyrSlideAt = millis();
   }
-  // Only while we are still on the line we were given: once it has turned over
-  // the "next" line IS the current one, and there is nothing after it yet.
-  if (!turned && lyrNextW)
-    drawStrip(lyrNextBmp, lyrNextW, 0, gTop + 11, SCREEN_W, 5);
+  wasTurned = turned;
 
-  drawNpBar(0, gTop + 19, SCREEN_W);
+  const int16_t Y1 = gTop + 2;          // where the sung line sits
+  const int16_t Y2 = gTop + 12;         // where the next one waits
+  int16_t d = 0;
+  if (lyrSlideAt) {
+    uint32_t el = millis() - lyrSlideAt;
+    if (el >= LYR_SLIDE_MS) lyrSlideAt = 0;
+    else d = (int16_t)((int32_t)(Y2 - Y1) * (int32_t)el / (int32_t)LYR_SLIDE_MS);
+  }
+
+  // The highlight stays put and the words move through it. A blank band is
+  // also what the gap between verses looks like, which is right.
+  oled->fillRect(0, Y1, SCREEN_W, 8, SSD1306_WHITE);
+
+  if (lyrSlideAt) {
+    if (lyrOutW)  drawStrip(lyrOutBmp,  lyrOutW,  0, Y1 - d, SCREEN_W, 4, Y1, gTop);
+    if (lyrNextW) drawStrip(lyrNextBmp, lyrNextW, 0, Y2 - d, SCREEN_W, 5, Y1, gTop);
+  } else if (turned) {
+    // Already turned over and the slide is done: the line that was "next" is
+    // the one being sung, and nothing has been sent to follow it yet.
+    if (lyrNextW) drawStrip(lyrNextBmp, lyrNextW, 0, Y1, SCREEN_W, 5, Y1, gTop);
+  } else {
+    if (lyrCurW)  drawStrip(lyrCurBmp,  lyrCurW,  0, Y1, SCREEN_W, 4, Y1, gTop);
+    if (lyrNextW) drawStrip(lyrNextBmp, lyrNextW, 0, Y2, SCREEN_W, 5, Y1, gTop);
+  }
 }
 
 void drawMusic() {
