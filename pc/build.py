@@ -66,6 +66,22 @@ def main():
         # Imported inside Link.connect(), only when you pick the emulator
         # port. Named explicitly so the exe can never ship without it.
         "--hidden-import", "fakepanel",
+        # Per-application volume. pycaw reaches the mixer through COM
+        # interfaces that comtypes builds at run time, so static analysis sees
+        # nothing; without these the exe starts and silently has no audio.
+        "--hidden-import", "audio",
+        "--hidden-import", "pycaw.pycaw",
+        "--hidden-import", "comtypes.gen",
+        "--hidden-import", "psutil",
+        "--hidden-import", "win32gui",
+        "--hidden-import", "win32process",
+        # What's playing comes from the Windows media sessions, through the
+        # winrt projection - also built at run time, also invisible to static
+        # analysis.
+        "--hidden-import", "nowplaying",
+        "--hidden-import", "winrt.windows.media.control",
+        "--hidden-import", "winrt.windows.foundation",
+        "--hidden-import", "winrt.system",
         os.path.join(HERE, "panel.py"),
     ]
     print(" ".join(cmd), "\n")

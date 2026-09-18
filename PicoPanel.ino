@@ -209,7 +209,8 @@ static const uint8_t SW3_PINS[] = { 10, 11, 12, 13, 14, 15 };
 #define CC_STOP       0x00B7
 
 enum ActKind : uint8_t {
-  AK_NONE = 0, AK_KEY, AK_COMBO, AK_CC, AK_CLICK, AK_WHEEL, AK_PAD, AK_TEXT
+  AK_NONE = 0, AK_KEY, AK_COMBO, AK_CC, AK_CLICK, AK_WHEEL, AK_PAD, AK_TEXT,
+  AK_APP        // per-application volume, carried out by the PC app
 };
 
 struct Action {
@@ -227,6 +228,13 @@ struct Action {
 #define SCROLL(d)    { AK_WHEEL, (uint16_t)(int16_t)(d),  0,                       "scroll " #d }
 #define PAD(n)       { AK_PAD,   (uint16_t)(n),           0,                       "pad " #n }
 #define TEXT(s)      { AK_TEXT,  0,                       0,                       (s) }
+
+// Windows has no "volume of YouTube" - it has one mixer channel per
+// process. Only the PC can reach those, so the board just asks, and the PC
+// app answers with the name and level to display. The board never learns
+// which apps exist: a new one appears on the panel with no firmware change.
+enum { APP_UP = 1, APP_DN, APP_PREV, APP_NEXT, APP_MUTE, APP_HOME };
+#define APP(c, lbl)  { AK_APP,   (uint16_t)(c),           0,                       lbl }
 
 /* ------------------------------------------------------------------------ *
  *  >>>>>>>>>>>>>>>>>>>>  MAP YOUR CONTROLS HERE  <<<<<<<<<<<<<<<<<<<<<<<<<  *
@@ -250,10 +258,15 @@ Action mapEncClick = PAD(19);
 // any button from the gamepad map.
 Action mapShiftA[4] = { MEDIA(CC_PLAY_PAUSE), MEDIA(CC_SCAN_NEXT),
                         MEDIA(CC_SCAN_PREV),  MEDIA(CC_MUTE) };
-Action mapShiftB[4] = { NOTHING, NOTHING, NOTHING, NOTHING };
+// The media layer's four spare buttons pick WHICH app the knob turns.
+Action mapShiftB[4] = { APP(APP_PREV, "app prev"), APP(APP_NEXT, "app next"),
+                        APP(APP_MUTE, "app mute"), APP(APP_HOME, "app Windows") };
 
-Action mapShiftEncCW    = MEDIA(CC_VOL_UP);
-Action mapShiftEncCCW   = MEDIA(CC_VOL_DN);
+// The knob moves the SELECTED app, not everything at once. With the PC app
+// not running there is nobody to ask, so it falls back to the plain media keys
+// and behaves exactly as it did before - see actFire().
+Action mapShiftEncCW    = APP(APP_UP, "app vol+");
+Action mapShiftEncCCW   = APP(APP_DN, "app vol-");
 Action mapShiftEncClick = MEDIA(CC_PLAY_PAUSE);
 
 // The panel's d-pad. While a slot is NOTHING, that button stays on page
@@ -281,6 +294,33 @@ bool        padUsed    = false;   // is there at least one PAD() in the tables?
 
 // State of the USER button. It lives OUTSIDE the HID fence: usrUpdate() uses it
 // on the Mbed core too, where everything else above doesn't exist.
+/* ---- the audio target, as reported by the PC app -------------------------
+   The board holds no list of applications. It shows one name, one level, and
+   its place in the list; the PC owns all of it and re-sends on every change.
+   If the PC goes quiet the panel says so instead of showing a stale number. */
+/* ---- what's playing, also from the PC app --------------------------------
+   The board is told the position ONCE and then keeps the clock itself: a media
+   session only reports where it has got to when something happens to it, so a
+   bar driven straight off those reports would jump every few seconds and stand
+   still in between. See npNowMs(). */
+char     npTitle[44]  = "";
+char     npArtist[24] = "";
+int32_t  npPosMs      = 0;      // as last told, in milliseconds
+uint32_t npPosAt      = 0;      // millis() when we were told
+int32_t  npDur        = 0;      // seconds, 0 = unknown
+bool     npPlaying    = false;
+char     npKind       = 's';    // 's' = a record with a disc, 'y' = a video
+uint32_t npSeen       = 0;
+#define NP_STALE_MS 6000UL
+
+char     audName[14] = "";
+int16_t  audVol      = -1;      // 0..100, -1 = not known
+bool     audMute     = false;
+uint8_t  audIdx      = 0;       // which target, 1-based for display
+uint8_t  audCount    = 0;
+uint32_t audSeen     = 0;
+#define AUD_STALE_MS 4000UL
+
 bool usrLevel   = false;    // held down right now, after debounce
 bool mediaLayer = false;    // layer two, LATCHED: stays until you toggle it back
 
@@ -373,6 +413,20 @@ SwGroup sw2 = { "SW2", SW2_PINS, 4, 3, 1, {0}, 0x0F, 0, 0, -1, -1, 0, 0, 0, 0 };
 SwGroup sw3 = { "SW3", SW3_PINS, 6, 5, 0, {0}, 0x3F, 0, 0, -1, -1, 0, 0, 0, 0 };
 
 // Position number of a throw, accounting for the common pin and the orientation.
+// Has the PC app spoken lately? Everything per-app depends on it being there.
+static bool audFresh() { return audSeen && (millis() - audSeen) < AUD_STALE_MS; }
+static bool npFresh()  { return npSeen  && (millis() - npSeen)  < NP_STALE_MS;  }
+
+// Where the track has got to, right now. Runs forward from the last report
+// while it's playing, and stands still when it isn't.
+static int32_t npNowMs() {
+  int32_t p = npPosMs;
+  if (npPlaying) p += (int32_t)(millis() - npPosAt);
+  if (p < 0) p = 0;
+  if (npDur > 0 && p > npDur * 1000) p = npDur * 1000;
+  return p;
+}
+
 int8_t swPosNumber(const SwGroup &g, int8_t throwIdx) {
   int8_t p = (throwIdx > g.common) ? throwIdx : (int8_t)(throwIdx + 1);
   if (g.reverse) p = (int8_t)(g.expect + 1 - p);
@@ -437,10 +491,12 @@ volatile uint32_t encChgB = 0;
 volatile uint8_t  encTrig = '?';
 
 // ------------------------------------------------------------------ state --
-enum Page { P_OVERVIEW = 0, P_GAME, P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO, P_COUNT };
+enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC, P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C,
+            P_INFO, P_COUNT };
 
 const char *PAGE_NAME[P_COUNT] =
-  { "PANEL", "GAME", "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO" };
+  { "PANEL", "GAME", "MUSIC", "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574",
+    "I2C", "INFO" };
 
 uint8_t  page       = P_OVERVIEW;
 int32_t  encValue   = 50;
@@ -1239,6 +1295,20 @@ void actFire(const Action &act, bool on, const char *label) {
       if (!on || !act.str) return;
       Keyboard.print(act.str);
       break;
+    case AK_APP:
+      if (!on) return;
+      // The PC app owns the Windows mixer, so we ask rather than act.
+      Serial.print(F("!AUD ")); Serial.println(act.a);
+      // Nobody listening? Then don't leave the knob dead: send the ordinary
+      // media key, which is what this layer did before per-app volume existed.
+      if (!audFresh()) {
+        uint16_t cc = 0;
+        if      (act.a == APP_UP)   cc = CC_VOL_UP;
+        else if (act.a == APP_DN)   cc = CC_VOL_DN;
+        else if (act.a == APP_MUTE) cc = CC_MUTE;
+        if (cc) { Keyboard.consumerPress(cc); delay(5); Keyboard.consumerRelease(); }
+      }
+      break;
     default:
       return;
   }
@@ -1512,6 +1582,53 @@ static void gameSetField(char *key, char *val) {
   }
 }
 
+/* '%' lines come from the PC app and are NOT telemetry: they must not make
+   the panel think a game is running. Hence a prefix of their own.
+       %au=2/7;nm=Spotify;vl=64;mu=0                                          */
+void audParse(char *s) {
+  char *save = NULL;
+  for (char *tok = strtok_r(s, ";", &save); tok; tok = strtok_r(NULL, ";", &save)) {
+    char *eq = strchr(tok, '=');
+    if (!eq) continue;
+    *eq = 0;
+    char *key = tok, *val = eq + 1;
+    if (!strcasecmp(key, "au")) {
+      audIdx = (uint8_t)atoi(val);
+      char *slash = strchr(val, '/');
+      audCount = slash ? (uint8_t)atoi(slash + 1) : 0;
+      audSeen = millis();
+    } else if (!strcasecmp(key, "nm")) {
+      strncpy(audName, val, sizeof(audName) - 1);
+      audName[sizeof(audName) - 1] = 0;
+    } else if (!strcasecmp(key, "vl")) {
+      audVol = (int16_t)atoi(val);
+    } else if (!strcasecmp(key, "mu")) {
+      audMute = (atoi(val) != 0);
+      audSeen = millis();
+    }
+    // ---- what's playing
+    else if (!strcasecmp(key, "np")) {
+      if (atoi(val) == 0) { npTitle[0] = 0; npArtist[0] = 0; npDur = 0; }
+      npSeen = millis();
+    } else if (!strcasecmp(key, "st")) {
+      npPlaying = (atoi(val) != 0);
+    } else if (!strcasecmp(key, "sk")) {
+      npKind = (val[0] == 'y') ? 'y' : 's';
+    } else if (!strcasecmp(key, "ps")) {
+      npPosMs = (int32_t)atol(val) * 1000;
+      npPosAt = millis();
+    } else if (!strcasecmp(key, "du")) {
+      npDur = (int32_t)atol(val);
+    } else if (!strcasecmp(key, "ti")) {
+      strncpy(npTitle, val, sizeof(npTitle) - 1);
+      npTitle[sizeof(npTitle) - 1] = 0;
+    } else if (!strcasecmp(key, "ar")) {
+      strncpy(npArtist, val, sizeof(npArtist) - 1);
+      npArtist[sizeof(npArtist) - 1] = 0;
+    }
+  }
+}
+
 void gameParse(char *s) {
   gameSeen = millis();
   gameLines++;
@@ -1755,6 +1872,143 @@ void usrUpdate() {
   page = (uint8_t)((page + 1) % P_COUNT);
 }
 
+
+/* ==========================================================================
+   MUSIC - what's playing, and how far in.
+
+   Two layouts, because two different things are being shown. A track from a
+   music player gets the spinning record and the artist's name. A browser tab
+   gets neither: there is no record and no artist, only a video with a title
+   long enough to want the whole width.
+   ========================================================================== */
+
+// The title rarely fits. Each line that might slide keeps its own place in the
+// slide, so the title and the artist don't march in lockstep.
+struct Marquee { uint16_t hash; uint32_t t0; };
+static Marquee marq[2];
+
+static uint16_t strHash(const char *s) {
+  uint16_t h = 0;
+  while (*s) h = (uint16_t)(h * 31u + (uint8_t)*s++);
+  return h;
+}
+
+// Draws s at (x,y) inside a window w wide. If it doesn't fit it slides right to
+// left and repeats, after standing still long enough for you to read the start.
+// Text drawn left of x is simply drawn there: GFX clips at the screen edge, and
+// whoever needs the space back paints over it afterwards.
+static void drawScroll(const char *s, int16_t x, int16_t y, int16_t w, uint8_t slot) {
+  int16_t tw = (int16_t)(6 * strlen(s));
+  if (tw <= w) { oled->setCursor(x, y); oled->print(s); return; }
+
+  // GFX wraps by default, and a title is always wider than the screen: left on,
+  // the overflow lands on the NEXT line and writes over the artist and the bar.
+  // It cost a confusing screenshot to find.
+  oled->setTextWrap(false);
+
+  uint16_t h = strHash(s);
+  if (marq[slot].hash != h) { marq[slot].hash = h; marq[slot].t0 = millis(); }
+
+  const int16_t  GAP  = 18;      // blank between the end and the repeat
+  const uint32_t LEAD = 1200;    // stand still this long before moving off
+  const uint32_t PXMS = 28;      // one pixel every this many ms (~36 px/s)
+
+  uint32_t el  = millis() - marq[slot].t0;
+  int16_t  off = 0;
+  if (el > LEAD) off = (int16_t)(((el - LEAD) / PXMS) % (uint32_t)(tw + GAP));
+
+  oled->setCursor(x - off, y);
+  oled->print(s);
+  oled->setCursor(x - off + tw + GAP, y);   // the copy chasing it
+  oled->print(s);
+  oled->setTextWrap(true);                  // as every other page expects it
+}
+
+static void printMmSs(int32_t sec) {
+  if (sec < 0) sec = 0;
+  oled->print(sec / 60);
+  oled->print(':');
+  int32_t r = sec % 60;
+  if (r < 10) oled->print('0');
+  oled->print(r);
+}
+
+// The whole track faded, the played part solid. No frame around it: an outline
+// would cost two of the three pixels the bar has.
+static void drawNpBar(int16_t x, int16_t y, int16_t w) {
+  const int16_t h = 3;
+  ditherRect(x, y, w, h, 5);
+  if (npDur > 0) {
+    int32_t p = npNowMs() / 1000;
+    if (p > npDur) p = npDur;
+    int16_t fw = (int16_t)((int32_t)w * p / npDur);
+    if (fw > 0) oled->fillRect(x, y, fw, h, SSD1306_WHITE);
+  }
+}
+
+// A record. The three marks are the point of it: a bare circle looks identical
+// from one frame to the next, and the disc would seem to be standing still.
+static void drawDisc(int16_t cx, int16_t cy, int16_t r) {
+  static uint32_t tPrev  = 0;
+  static uint32_t spinMs = 0;         // time spent PLAYING, so pause freezes it
+  uint32_t now = millis();
+  uint32_t dt  = now - tPrev;
+  tPrev = now;
+  if (dt > 250) dt = 250;             // back from a sleeping screen: don't leap
+  if (npPlaying) spinMs += dt;
+
+  int32_t ang = (int32_t)((spinMs * 72u / 1000u) % 360u);   // 72 deg/s, 12 rpm
+
+  oled->drawCircle(cx, cy, r, SSD1306_WHITE);
+  oled->fillCircle(cx, cy, 2, SSD1306_WHITE);
+  for (uint8_t k = 0; k < 3; k++) {
+    float a = (float)(ang + k * 120) * 0.01745329f;
+    float c = cosf(a), sn = sinf(a);
+    oled->drawLine((int16_t)(cx + c * 4),       (int16_t)(cy + sn * 4),
+                   (int16_t)(cx + c * (r - 2)), (int16_t)(cy + sn * (r - 2)),
+                   SSD1306_WHITE);
+  }
+}
+
+void drawMusic() {
+  oled->setTextSize(1);
+
+  if (!npFresh() || !npTitle[0]) {
+    oled->setCursor(0, gTop + 2);
+    oled->print(npFresh() ? F("nothing playing") : F("PC app not running"));
+    return;
+  }
+
+  if (npKind == 'y') {
+    // A video: title across the whole width, then the time, then the bar.
+    drawScroll(npTitle, 0, gTop + 1, SCREEN_W, 0);
+
+    oled->setCursor(0, gTop + 11);
+    printMmSs(npNowMs() / 1000);
+    if (npDur > 0) { oled->print(F(" / ")); printMmSs(npDur); }
+    if (!npPlaying) oled->print(F("  ||"));
+
+    drawNpBar(0, gTop + 19, SCREEN_W);
+    return;
+  }
+
+  const int16_t r  = 10;
+  const int16_t cx = r + 1, cy = gTop + 11;
+  const int16_t tx = 2 * r + 5;               // text starts clear of the disc
+  const int16_t tw = SCREEN_W - tx;
+
+  drawScroll(npTitle, tx, gTop + 1, tw, 0);
+  if (npArtist[0]) drawScroll(npArtist, tx, gTop + 11, tw, 1);
+
+  // Both lines slide off to the left, over where the disc goes. Paint the
+  // column out and put the disc on top - cheaper than clipping by hand, and
+  // GFX has no clip rectangle to ask for.
+  oled->fillRect(0, gTop, tx, 22, SSD1306_BLACK);
+  drawDisc(cx, cy, r);
+
+  drawNpBar(tx, gTop + 19, tw);
+}
+
 void drawHid() {
 #if HID_AVAILABLE
   oled->setCursor(0, 11);
@@ -1767,6 +2021,34 @@ void drawHid() {
   // The last action and its counter were taken out of here: with nothing pressed
   // they read "- n=0", permanent noise for rarely useful information. They're
   // still there under the 'j' command on serial.
+
+  // Second line: which app the knob is pointing at. Only worth the space while
+  // the media layer is on - that is the only time the knob moves a volume.
+  oled->setCursor(0, 21);
+  if (!mediaLayer) {
+    oled->print(F("USER x2 = media"));
+  } else if (!audFresh()) {
+    oled->print(F("vol: all (no app)"));
+  } else {
+    oled->print(audName[0] ? audName : "?");
+    if (audCount) {
+      oled->print(' ');
+      oled->print(audIdx);
+      oled->print('/');
+      oled->print(audCount);
+    }
+    // A bar on the right is read at a glance; the number is for when you care
+    // about the exact value.
+    const int16_t bx = 84, bw = SCREEN_W - bx - 1;
+    if (audMute) {
+      oled->setCursor(bx + 6, 21);
+      oled->print(F("MUTE"));
+    } else if (audVol >= 0) {
+      oled->drawRect(bx, 21, bw, 8, SSD1306_WHITE);
+      int16_t fill = (int16_t)((int32_t)(bw - 2) * audVol / 100);
+      if (fill > 0) oled->fillRect(bx + 1, 22, fill, 6, SSD1306_WHITE);
+    }
+  }
 #else
   oled->setCursor(0, 11); oled->print(F("HID unavailable"));
   oled->setCursor(0, 21); oled->print(F("(Mbed core)"));
@@ -2409,6 +2691,7 @@ void render() {
     case P_I2C:      drawI2C();      break;
     case P_INFO:     drawInfo();     break;
     case P_HID:      drawHid();      break;
+    case P_MUSIC:    drawMusic();    break;
     case P_GAME:     drawGame();     break;
   }
   oled->display();
@@ -2873,6 +3156,14 @@ void printHelp() {
   Serial.println(F("    w = double-press window:"));
   Serial.println(F("        50 / 100 / 200 / 250 / 400 / 600 / 800 / 1200 ms"));
   Serial.println(F("    all 8 buttons + the encoder stay with the PC"));
+  Serial.println(F("  PER-APP VOLUME (media layer, needs the PC app)"));
+  Serial.println(F("    knob      = louder / quieter, SELECTED app only"));
+  Serial.println(F("    ^B1 ^B2   = previous / next app"));
+  Serial.println(F("    ^B3       = mute that app   ^B4 = back to Windows"));
+  Serial.println(F("    board->PC : !AUD <code>   PC->board : %au=2/7;nm=..;vl=..;mu=0"));
+  Serial.println(F("  MUSIC page"));
+  Serial.println(F("    %np=1;st=1;sk=s|y;ps=<sec>;du=<sec>;ti=<title>;ar=<artist>"));
+  Serial.println(F("    sk=s draws the disc and the artist, sk=y the time instead"));
   Serial.println(F("  GAME TELEMETRY"));
   Serial.println(F("    a line starting with '$', key=value fields split by ';'"));
   Serial.println(F("    $src=ETS2;spd=88;rpm=1450;rpmmax=2500;rl=2250;gear=6;fuel=62"));
@@ -2889,6 +3180,9 @@ void handleSerial() {
   static char tBuf[224];
   static uint8_t tLen = 0;
   static bool tCap = false;
+  static char aBuf[192];      // a title can be 40 characters on its own
+  static uint8_t aLen = 0;
+  static bool aCap = false;
 
   while (Serial.available()) {
     char c = Serial.read();
@@ -2905,7 +3199,20 @@ void handleSerial() {
       continue;                 // telemetry does NOT wake the screen: it would
     }                           // stream non-stop while the game is running
 
+    if (aCap) {
+      if (c == '\n' || c == '\r') {
+        aBuf[aLen] = 0;
+        if (aLen) audParse(aBuf);
+        aLen = 0;
+        aCap = false;
+      } else if (aLen < sizeof(aBuf) - 1) {
+        aBuf[aLen++] = c;
+      }
+      continue;                 // like telemetry, this must not wake the screen
+    }
+
     if (c == '$') { tCap = true; tLen = 0; continue; }
+    if (c == '%') { aCap = true; aLen = 0; continue; }
 
     if (c != '\r' && c != '\n') oledWake();
     switch (c) {
@@ -3064,6 +3371,21 @@ void serialReport() {
   Serial.print(F(" PG=")); Serial.print(page);
   Serial.print(F(" GM=")); Serial.print(gameFresh() ? gameSrc : "-");
   Serial.print(F(" GL=")); Serial.print(gameLines);   // lines received, total
+  // Which app the knob would move, so you can tell from here whether the PC
+  // app is answering at all - the same reason GM= and GL= are in this line.
+  // Just a flag: '-' nobody telling us, 0 idle, 1 playing. The title itself
+  // would double the length of a line that goes out five times a second.
+  Serial.print(F(" NP="));
+  if (!npFresh())        Serial.print('-');
+  else if (!npTitle[0])  Serial.print('0');
+  else                   Serial.print(npPlaying ? '1' : 'p');
+  Serial.print(F(" AU="));
+  if (!audFresh()) Serial.print('-');
+  else {
+    Serial.print(audName[0] ? audName : "?");
+    Serial.print(':');
+    if (audMute) Serial.print(F("mute")); else Serial.print(audVol);
+  }
 #if HID_AVAILABLE
   Serial.print(F(" HID=")); Serial.print(hidArmed ? '1' : '0');
 #else

@@ -5,7 +5,7 @@ Both directions travel over the same serial link:
 | Direction | What goes across |
 |---|---|
 | Pico -> PC | telemetry, ~5 times a second: buttons, switches, encoder, page, HID state, OLED state, plus the screen's frame buffer while the mirror is on |
-| PC -> Pico | game telemetry at 60 Hz, plus console commands from the buttons or typed by hand |
+| PC -> Pico | game telemetry at 60 Hz, the audio target and what's playing twice a second, plus console commands from the buttons or typed by hand |
 
 ## Starting it
 
@@ -36,6 +36,73 @@ the IDE holds it, this app can't open it (and arduino-cli can't flash either).
 
 At the bottom is the raw log: everything that isn't telemetry (replies to
 commands, startup messages) lands there. What you send appears with `>>>`.
+
+## Per-application volume
+
+The knob can turn Spotify down without touching anything else. Hold the media
+layer (double-tap USER) with HID armed, and:
+
+| Control | What it does |
+|---|---|
+| the knob | louder / quieter, **the selected app only** |
+| `^B1` / `^B2` | previous / next app |
+| `^B3` | mute that app |
+| `^B4` | back to `Windows`, the master volume |
+
+The selected app and its level show on the panel's HID page, and in the status
+line as `AU=Spotify:68`.
+
+### What "YouTube" means here
+
+Windows has no volume for a web site. It has one mixer channel per *process* -
+the list the volume mixer shows - so what actually moves is the browser's
+channel. The app labels that channel `YouTube` only when a window of that
+browser says YouTube, and otherwise leaves it under the browser's own name, so
+the panel never claims to control something it isn't.
+
+The consequence worth knowing: two tabs in the same browser share one channel.
+YouTube and a Twitch stream in the same window move together.
+
+### Without the app running
+
+Nothing is lost. The board notices it has had no answer for four seconds and
+the knob goes back to the ordinary media keys, which is what that layer did
+before any of this existed.
+
+Needs `pycaw` (which pulls in `comtypes`). `psutil` and `pywin32` are what read
+the window titles; without them the browser keeps its own name instead of
+becoming `YouTube`.
+
+## The MUSIC page
+
+A page of its own for what's playing, in two layouts, because two different
+things are being shown.
+
+**From a music player** - a record that turns while the track plays and stops
+when you pause it, the title, the artist, and the progress bar. **From a
+browser** - no record and no artist, because a video has neither: the title
+across the full width, the time as `1:37 / 2:40`, and the bar.
+
+A title too long for the space slides right to left and repeats, after standing
+still for a moment so you can read the beginning.
+
+The bar is the whole track dithered faintly with the played part solid, rather
+than an outlined box - an outline would eat two of the three pixels it has.
+
+### Where the numbers come from
+
+Windows' own media sessions, the same ones behind the volume overlay, so any
+player that puts controls on the lock screen works without being taught about.
+
+One wrinkle worth recording: a session reports its position only when something
+happens to it, and stamps the report with the time. Read that naively and the
+bar jumps every few seconds and sits still in between. The app therefore sends
+the reported position **plus how old that report is**, and the board runs the
+clock forward itself - which is also why the bar keeps moving smoothly at 40
+frames a second off two updates a second.
+
+Needs `winrt-Windows.Media.Control`. Without it the page says the app isn't
+running; everything else carries on.
 
 ## Sharing OutGauge with CorsaConnect
 

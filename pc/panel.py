@@ -32,6 +32,7 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from telemetry.sources import ALL
 
+import audio
 import autostart
 import settings
 
@@ -119,8 +120,11 @@ class Link:
     """The serial link. Reading sits on its own thread and posts through the
     queue: Tkinter isn't safe from another thread."""
 
-    def __init__(self, q):
+    def __init__(self, q, on_audio=None):
         self.q = q
+        # Called straight from the reader thread for '!AUD' lines. It only
+        # enqueues, so the reader is never held up by COM calls.
+        self.on_audio = on_audio
         self.ser = None
         self.thread = None
         self.stop = threading.Event()
@@ -206,6 +210,17 @@ class Link:
                     except (ValueError, base64.binascii.Error):
                         pass
                     continue
+                if line.startswith("!AUD "):
+                    # The panel asking for a volume change. Handled off this
+                    # thread - see AudioBridge - and deliberately NOT logged:
+                    # a spin of the knob would fill the window with twenty
+                    # identical lines.
+                    try:
+                        if self.on_audio:
+                            self.on_audio(int(line.split()[1]))
+                    except (ValueError, IndexError):
+                        pass
+                    continue
                 tel = parse_telemetry(line)
                 self.q.put(("tel", tel) if tel else ("rx", line))
 
@@ -275,7 +290,14 @@ class App(tk.Tk):
 
         self.cfg = settings.load()
         self.q = queue.Queue()
-        self.link = Link(self.q)
+
+        # Per-application volume. The board asks ('!AUD n'), this answers with
+        # the name and level to show ('%au=..'). Created before the link so the
+        # reader thread always has somewhere to hand its requests.
+        self.audio = audio.AudioBridge(
+            send=lambda line: self.link.send(line, echo=False),
+            log=lambda msg: self.q.put(("err", msg)))
+        self.link = Link(self.q, on_audio=self.audio.request)
         self.hub = Hub()
         self.hub.yield_outgauge = bool(self.cfg.get("yield_outgauge"))
         self.last_tel = None
@@ -290,6 +312,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.hub.start()
+        self.audio.start()
         port = find_pico()
         if port:
             self.port_var.set(port)
@@ -495,6 +518,7 @@ class App(tk.Tk):
 
     def _quit(self):
         self._stop_send.set()
+        self.audio.stop()
         self.hub.stop()
         self.link.disconnect()
         if self.tray:
