@@ -407,10 +407,22 @@ class AudioBridge:
         try:
             import textstrip
             self._strip = textstrip.line
+            self._strip_fields = textstrip.fields
         except Exception:
             self._strip = lambda _k, _t: None
+            self._strip_fields = lambda _t: None
         self._sent_strips = (None, None)
         self.unicode_titles = True      # the app overrides this from settings
+        # Karaoke. Off until the app turns it on: it is the one thing here that
+        # leaves the machine.
+        try:
+            import lyrics
+            self.lyrics = lyrics.Lyrics(enabled=False)
+            self._line_at = lyrics.line_at
+        except Exception:
+            self.lyrics = None
+            self._line_at = None
+        self._sent_lyric = None
         self._q = queue.Queue()
         self._stop = threading.Event()
         self._thread = None
@@ -526,6 +538,40 @@ class AudioBridge:
             if line:
                 self.send(line)
 
+    def _send_lyrics(self, snap):
+        """The line being sung and the one after, each with when it starts.
+
+        Sent on a CHANGE of line, not on every heartbeat: each is a rendered
+        strip of a couple of hundred bytes. The board does the switching from
+        the timestamps, so it turns the line over on its own clock instead of
+        waiting for the next of these.
+        """
+        if not self.lyrics or not self.lyrics.enabled or not snap:
+            return
+        lines = self.lyrics.get(snap.get("raw_artist"), snap.get("raw_title"),
+                                snap.get("dur"))
+        if not lines:
+            return                       # still looking, or this track has none
+        i = self._line_at(lines, float(snap.get("pos") or 0.0))
+        key = (id(lines), i)
+        if key == self._sent_lyric:
+            return
+        self._sent_lyric = key
+
+        def strip(kind, at_s, text):
+            body = self._strip_fields(text) if text else None
+            if body is None:
+                # A blank line between verses still has to be sent, or the board
+                # would keep singing the last one through the instrumental.
+                body = "w=0;d="
+            return "%%ky=%d;at=%d;%s" % (kind, int(at_s * 1000), body)
+
+        cur = lines[i] if i >= 0 else (0.0, "")
+        nxt = lines[i + 1] if i + 1 < len(lines) else None
+        self.send(strip(1, cur[0], cur[1]))
+        self.send(strip(2, nxt[0], nxt[1]) if nxt
+                  else "%ky=2;at=0;w=0;d=")
+
     def _run(self):
         while not self._stop.is_set():
             try:
@@ -554,6 +600,7 @@ class AudioBridge:
                     if line:
                         self.send(line)
                     self._send_strips(snap)
+                    self._send_lyrics(snap)
             except Exception:
                 pass                    # the board went away; not our problem
 

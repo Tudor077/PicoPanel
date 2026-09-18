@@ -322,8 +322,25 @@ bool        padUsed    = false;   // is there at least one PAD() in the tables?
 // The title rarely fits. Each line that might slide keeps its own place in the
 // slide, so the title and the artist don't march in lockstep.
 struct Marquee { uint16_t hash; uint32_t t0; };
-// 0 title text, 1 artist text, 2 title strip, 3 artist strip.
-static Marquee marq[4];
+// 0 title text, 1 artist text, 2 title strip, 3 artist strip, 4 the sung line.
+static Marquee marq[5];
+
+/* The karaoke lines, also pixels drawn on the PC.
+
+   Two of them, each with the millisecond it belongs to, so the BOARD does the
+   switching. The PC only speaks twice a second; a line that changed when the
+   next heartbeat happened to land would be up to half a second late, which on
+   a sung line you can see. With the timestamp, the board changes it against its
+   own clock - the same one that already runs the progress bar forward. */
+#define LYR_BMP_MAX 250
+uint8_t  lyrCurBmp[LYR_BMP_MAX];
+uint16_t lyrCurW = 0;
+int32_t  lyrCurAt = 0;
+uint8_t  lyrNextBmp[LYR_BMP_MAX];
+uint16_t lyrNextW = 0;
+int32_t  lyrNextAt = 0;
+uint32_t lyrSeen = 0;
+#define LYR_STALE_MS 8000UL
 
 #define NP_BMP_MAX 250
 uint8_t  npTitleBmp[NP_BMP_MAX];
@@ -450,6 +467,7 @@ SwGroup sw3 = { "SW3", SW3_PINS, 6, 5, 0, {0}, 0x3F, 0, 0, -1, -1, 0, 0, 0, 0 };
 static bool audFresh() { return audSeen && (millis() - audSeen) < AUD_STALE_MS; }
 static bool npFresh()  { return npSeen  && (millis() - npSeen)  < NP_STALE_MS;  }
 static bool audShowing() { return audTouch && (millis() - audTouch) < AUD_SHOW_MS; }
+static bool lyrFresh() { return lyrSeen && (millis() - lyrSeen) < LYR_STALE_MS; }
 
 // Where the track has got to, right now. Runs forward from the last report
 // while it's playing, and stands still when it isn't.
@@ -525,12 +543,12 @@ volatile uint32_t encChgB = 0;
 volatile uint8_t  encTrig = '?';
 
 // ------------------------------------------------------------------ state --
-enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC, P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C,
-            P_INFO, P_COUNT };
+enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC, P_KARAOKE, P_HID, P_SW, P_ENC, P_BTN,
+            P_PCF, P_I2C, P_INFO, P_COUNT };
 
 const char *PAGE_NAME[P_COUNT] =
-  { "PANEL", "GAME", "MUSIC", "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574",
-    "I2C", "INFO" };
+  { "PANEL", "GAME", "MUSIC", "KARAOKE", "HID", "SWITCHES", "ENCODER", "BUTTONS",
+    "PCF8574", "I2C", "INFO" };
 
 uint8_t  page       = P_OVERVIEW;
 int32_t  encValue   = 50;
@@ -1685,6 +1703,7 @@ void audParse(char *s) {
   // same line; the PC always sends them in that order.
   uint8_t  tsKind = 0;
   uint16_t tsW    = 0;
+  int32_t  tsAt   = 0;
   char *save = NULL;
   for (char *tok = strtok_r(s, ";", &save); tok; tok = strtok_r(NULL, ";", &save)) {
     char *eq = strchr(tok, '=');
@@ -1719,22 +1738,41 @@ void audParse(char *s) {
     // ---- a rendered line of text: "%ts=1;w=63;d=<base64>"
     else if (!strcasecmp(key, "ts")) {
       tsKind = (uint8_t)atoi(val);
+    } else if (!strcasecmp(key, "ky")) {
+      tsKind = (uint8_t)(2 + atoi(val));      // 3 = this line, 4 = the next
+      lyrSeen = millis();
+    } else if (!strcasecmp(key, "at")) {
+      tsAt = (int32_t)atol(val);
     } else if (!strcasecmp(key, "w")) {
       tsW = (uint16_t)atoi(val);
     } else if (!strcasecmp(key, "d")) {
-      uint8_t *dst = (tsKind == 2) ? npArtBmp : npTitleBmp;
-      uint16_t got = b64Decode(val, dst, NP_BMP_MAX);
+      uint8_t *dst;
+      uint16_t cap;
+      switch (tsKind) {
+        case 2:  dst = npArtBmp;   cap = NP_BMP_MAX;  break;
+        case 3:  dst = lyrCurBmp;  cap = LYR_BMP_MAX; break;
+        case 4:  dst = lyrNextBmp; cap = LYR_BMP_MAX; break;
+        default: dst = npTitleBmp; cap = NP_BMP_MAX;  break;
+      }
+      uint16_t got = b64Decode(val, dst, cap);
       if (got > tsW) got = tsW;              // trust the declared width
-      if (tsKind == 2) { npArtW = got;   marq[3].t0 = millis(); marq[3].hash = 0; }
-      else             { npTitleW = got; marq[2].t0 = millis(); marq[2].hash = 0; }
+      switch (tsKind) {
+        case 2: npArtW   = got; marq[3].t0 = millis(); marq[3].hash = 0; break;
+        case 3: lyrCurW  = got; lyrCurAt  = tsAt;
+                marq[4].t0 = millis(); marq[4].hash = 0; break;
+        case 4: lyrNextW = got; lyrNextAt = tsAt;      break;
+        default: npTitleW = got; marq[2].t0 = millis(); marq[2].hash = 0; break;
+      }
       tsKind = 0;
       tsW = 0;
+      tsAt = 0;
     }
     // ---- what's playing
     else if (!strcasecmp(key, "np")) {
       if (atoi(val) == 0) {
         npTitle[0] = 0; npArtist[0] = 0; npDur = 0;
         npTitleW = 0;   npArtW = 0;       // and their pixels, or they'd linger
+        lyrCurW = 0;    lyrNextW = 0;
       }
       npSeen = millis();
     } else if (!strcasecmp(key, "st")) {
@@ -2083,6 +2121,13 @@ static void drawScroll(const char *s, int16_t x, int16_t y, int16_t w, uint8_t s
   oled->setTextWrap(true);                  // as every other page expects it
 }
 
+static const uint8_t BAYER4[16] = {
+   0,  8,  2, 10,
+  12,  4, 14,  6,
+   3, 11,  1,  9,
+  15,  7, 13,  5
+};
+
 /* The pixel version of drawScroll. Same timing, so a line that arrives as a
    strip slides exactly like one that arrives as text.
 
@@ -2092,7 +2137,8 @@ static void drawScroll(const char *s, int16_t x, int16_t y, int16_t w, uint8_t s
    inside the window, nothing spills over the disc: no painting out afterwards.
 */
 static void drawStrip(const uint8_t *bmp, uint16_t w,
-                      int16_t x, int16_t y, int16_t win, uint8_t slot) {
+                      int16_t x, int16_t y, int16_t win, uint8_t slot,
+                      bool dim = false) {
   if (!w) return;
   const int16_t GAP = 18;
   const uint32_t LEAD = 1200, PXMS = 28;
@@ -2114,8 +2160,14 @@ static void drawStrip(const uint8_t *bmp, uint16_t w,
     }
     uint8_t col = bmp[src];
     if (!col) continue;
-    for (uint8_t r = 0; r < 8; r++)
-      if (col & (1 << r)) oled->drawPixel(x + sx, y + r, SSD1306_WHITE);
+    for (uint8_t r = 0; r < 8; r++) {
+      if (!(col & (1 << r))) continue;
+      // "dim" keeps a bit under half the pixels, on the same Bayer grid the
+      // bars use. On one bit per pixel that is the only grey there is, and it
+      // is enough to read the next line as coming rather than current.
+      if (dim && BAYER4[((r & 3) << 2) | ((x + sx) & 3)] >= 7) continue;
+      oled->drawPixel(x + sx, y + r, SSD1306_WHITE);
+    }
   }
 }
 
@@ -2206,6 +2258,48 @@ void drawAudioPicker() {
   ditherRect(0, y, SCREEN_W, h, 5);
   int16_t fw = (int16_t)((int32_t)SCREEN_W * audVol / 100);
   if (fw > 0) oled->fillRect(0, y, fw, h, SSD1306_WHITE);
+}
+
+/* KARAOKE - the line being sung, and the one after it, faint.
+
+   The board decides which is which. The PC hands over both lines with the
+   millisecond each begins; here we compare that against the same running clock
+   the progress bar uses, so the line turns over on time rather than on the next
+   heartbeat. */
+void drawKaraoke() {
+  oled->setTextSize(1);
+
+  if (!npFresh() || !npTitle[0]) {
+    oled->setCursor(0, gTop + 2);
+    oled->print(F("nothing playing"));
+    return;
+  }
+  if (!lyrFresh()) {
+    oled->setCursor(0, gTop + 2);
+    oled->print(F("karaoke is off"));
+    oled->setCursor(0, gTop + 12);
+    oled->print(F("turn it on in the app"));
+    return;
+  }
+
+  int32_t now = npNowMs();
+  bool    turned = (lyrNextW && now >= lyrNextAt);
+
+  const uint8_t *cur = turned ? lyrNextBmp : lyrCurBmp;
+  uint16_t       curW = turned ? lyrNextW  : lyrCurW;
+
+  if (curW) {
+    drawStrip(cur, curW, 0, gTop + 1, SCREEN_W, 4);
+  } else {
+    oled->setCursor(0, gTop + 1);
+    oled->print(F("..."));            // the gap between verses, not a fault
+  }
+  // Only while we are still on the line we were given: once it has turned over
+  // the "next" line IS the current one, and there is nothing after it yet.
+  if (!turned && lyrNextW)
+    drawStrip(lyrNextBmp, lyrNextW, 0, gTop + 11, SCREEN_W, 4, true);
+
+  drawNpBar(0, gTop + 19, SCREEN_W);
 }
 
 void drawMusic() {
@@ -2505,12 +2599,8 @@ void drawInfo() {
    changes slightly. A threshold matrix is stable: the same level always draws
    the same pattern.
    -------------------------------------------------------------------------- */
-static const uint8_t BAYER4[16] = {
-   0,  8,  2, 10,
-  12,  4, 14,  6,
-   3, 11,  1,  9,
-  15,  7, 13,  5
-};
+// (the table itself moved up - drawStrip needs it too, and Arduino
+//  auto-prototypes functions but not variables.)
 
 // level: 0 = empty, 16 = full
 static void ditherRect(int x, int y, int w, int h, uint8_t level) {
@@ -2962,6 +3052,7 @@ void render() {
     case P_INFO:     drawInfo();     break;
     case P_HID:      drawHid();      break;
     case P_MUSIC:    drawMusic();    break;
+    case P_KARAOKE:  drawKaraoke();  break;
     case P_GAME:     drawGame();     break;
   }
   oled->display();
@@ -3438,6 +3529,8 @@ void printHelp() {
   Serial.println(F("    sk=s draws the disc and the artist, sk=y the time instead"));
   Serial.println(F("    %ts=1|2;w=<px>;d=<base64>  a line drawn on the PC, one"));
   Serial.println(F("    byte per column - how Cyrillic gets on a 5x7 ASCII panel"));
+  Serial.println(F("    %ky=1|2;at=<ms>;w=<px>;d=<base64>  a sung line and the next,"));
+  Serial.println(F("    each with the millisecond it starts - the board switches them"));
   Serial.println(F("    on the MUSIC page - and on the last GAME sub-page - the"));
   Serial.println(F("    B buttons and the knob move the volume WITHOUT HID armed"));
   Serial.println(F("  GAME TELEMETRY"));

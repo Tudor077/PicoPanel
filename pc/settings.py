@@ -32,6 +32,12 @@ DEFAULTS = {
     # but it is the more complicated of the two and it is off by choice, not
     # because it failed. The checkbox in the app turns it back on.
     "app_own_volume": False,
+
+    # Synced lyrics on the KARAOKE page. OFF by default, and it is the only
+    # thing in this program that talks to the internet: it asks lrclib.net for
+    # the words, sending the artist, the title and the length. Nothing else,
+    # and only once per track - but it is your listening, so you turn it on.
+    "karaoke": False,
 }
 
 

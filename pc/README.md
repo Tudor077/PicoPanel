@@ -255,6 +255,30 @@ to `(untitled)`, and the disc, the time and the bar carry on working.
 The same rules run over game telemetry, where they were quietly eating city
 names: ETS2's `Kraków` used to reach the panel as `Krakw`.
 
+## The KARAOKE page
+
+The line being sung, and the one after it drawn faint. Both are rendered here
+with a real font and sent as pixels, like the titles, so a Russian song is a
+Russian song.
+
+**The board decides when the line turns over.** It is handed both lines with the
+millisecond each begins, and compares that against the clock it already runs for
+the progress bar. Sending "the current line" twice a second instead would have
+left every change up to half a second late, which on a sung line you can see.
+
+A blank line between verses is sent as a blank, not skipped - otherwise the
+panel keeps singing the last line through the instrumental.
+
+### It is off, and this is why
+
+This is the only part of PicoPanel that talks to the internet. Tick **Karaoke**
+in the app and it asks [lrclib.net](https://lrclib.net) for the words, sending
+the artist, the title and the track length - enough to identify the song and
+nothing else, once per track, never per second. lrclib needs no account and no
+key.
+
+Until you tick it, nothing leaves the machine and the page says so.
+
 ## Sharing OutGauge with CorsaConnect
 
 OutGauge has exactly one listener, and

@@ -92,6 +92,20 @@ def render(text):
     return w, bytes(out)
 
 
+def fields(text):
+    """("w=63;d=<base64>") for that text, or None. The caller adds its own key.
+
+    Building these lines by patching the text of another one was tried and went
+    wrong quietly: the prefix it replaced only matched the first kind, so the
+    second line went out labelled as the first.
+    """
+    got = render(text)
+    if not got:
+        return None
+    w, data = got
+    return "w=%d;d=%s" % (w, base64.b64encode(data).decode("ascii"))
+
+
 def line(kind, text):
     """The '%ts=' line for the board, or None.
 

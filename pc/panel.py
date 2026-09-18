@@ -301,6 +301,8 @@ class App(tk.Tk):
             on_select=self._remember_audio_target)
         self.audio.unicode_titles = bool(self.cfg.get("unicode_titles", True))
         self.audio.mixer.set_use_inapp(bool(self.cfg.get("app_own_volume", True)))
+        if self.audio.lyrics:
+            self.audio.lyrics.enabled = bool(self.cfg.get("karaoke", False))
         self.link = Link(self.q, on_audio=self.audio.request)
         self.hub = Hub()
         self.hub.yield_outgauge = bool(self.cfg.get("yield_outgauge"))
@@ -478,6 +480,11 @@ class App(tk.Tk):
                         variable=self.inapp_var,
                         command=self._toggle_inapp).pack(padx=6, pady=2)
 
+        self.kar_var = tk.BooleanVar(value=bool(self.cfg.get("karaoke", False)))
+        ttk.Checkbutton(right, text="Karaoke (asks lrclib.net for lyrics)",
+                        variable=self.kar_var,
+                        command=self._toggle_karaoke).pack(padx=6, pady=2)
+
         logf = ttk.LabelFrame(self, text="Log")
         logf.pack(fill="both", expand=True, **pad)
         self.log = tk.Text(logf, height=10, wrap="none", state="disabled",
@@ -543,6 +550,22 @@ class App(tk.Tk):
         self.audio.unicode_titles = on
         self._log("titles: %s" % ("their own alphabet" if on
                                   else "Latin letters, panel font"), "info")
+
+    def _toggle_karaoke(self):
+        """Synced lyrics on the KARAOKE page.
+
+        The only thing in this program that leaves the machine, which is why it
+        starts off: it sends the artist, the title and the length to lrclib.net,
+        once per track, and gets the words back. Nothing else goes, and nothing
+        goes at all while this is unticked.
+        """
+        on = bool(self.kar_var.get())
+        self.cfg["karaoke"] = on
+        settings.save(self.cfg)
+        if self.audio.lyrics:
+            self.audio.lyrics.enabled = on
+        self._log("karaoke: %s" % ("on - lyrics come from lrclib.net" if on
+                                   else "off, nothing leaves this machine"), "info")
 
     def _toggle_inapp(self):
         """The app's own slider, or only its channel in the mixer.

@@ -86,6 +86,8 @@ def main():
         # Titles are drawn here with a real font and sent as pixels, which is
         # how Cyrillic reaches a panel whose own font is ASCII.
         "--hidden-import", "textstrip",
+        # Synced lyrics for the karaoke page.
+        "--hidden-import", "lyrics",
         "--hidden-import", "PIL.ImageFont",
         "--hidden-import", "PIL.ImageDraw",
         # UI Automation, for an app's own volume slider. comtypes builds the
