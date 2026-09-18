@@ -83,6 +83,11 @@ def main():
         "--hidden-import", "winrt.windows.foundation",
         "--hidden-import", "winrt.system",
         "--hidden-import", "telemetry.text",
+        # Titles are drawn here with a real font and sent as pixels, which is
+        # how Cyrillic reaches a panel whose own font is ASCII.
+        "--hidden-import", "textstrip",
+        "--hidden-import", "PIL.ImageFont",
+        "--hidden-import", "PIL.ImageDraw",
         # UI Automation, for an app's own volume slider. comtypes builds the
         # wrapper at run time into a writable cache, which works frozen too -
         # verified - but the import itself is still invisible to the analyser.

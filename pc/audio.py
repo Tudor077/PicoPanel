@@ -396,6 +396,16 @@ class AudioBridge:
         except Exception:
             self.now = None
             self._np_line = lambda _s: None
+        # The board's font is ASCII, so anything else is drawn HERE and sent as
+        # pixels. Only on a change: a rendered title is ~250 bytes and the
+        # heartbeat runs twice a second.
+        try:
+            import textstrip
+            self._strip = textstrip.line
+        except Exception:
+            self._strip = lambda _k, _t: None
+        self._sent_strips = (None, None)
+        self.unicode_titles = True      # the app overrides this from settings
         self._q = queue.Queue()
         self._stop = threading.Event()
         self._thread = None
@@ -486,6 +496,31 @@ class AudioBridge:
             1 if muted else 0,
             self.mixer.source(i))
 
+    def _send_strips(self, snap):
+        """The title and artist as pixels, when either has changed.
+
+        Keyed on the ORIGINAL text, not the transliterated one: two different
+        Russian titles can transliterate to the same thing, and the point of the
+        strip is that it shows what was actually written.
+        """
+        if not self.unicode_titles:
+            if self._sent_strips != ("", ""):
+                # Turned off while a strip was on screen: clear it, or the board
+                # would keep drawing pixels the setting says it shouldn't.
+                self._sent_strips = ("", "")
+                self.send("%ts=1;w=0;d=")
+                self.send("%ts=2;w=0;d=")
+            return
+        want = ((snap or {}).get("raw_title") or "",
+                (snap or {}).get("raw_artist") or "")
+        if want == self._sent_strips:
+            return
+        self._sent_strips = want
+        for kind, text in ((1, want[0]), (2, want[1])):
+            line = self._strip(kind, text) if text else None
+            if line:
+                self.send(line)
+
     def _run(self):
         while not self._stop.is_set():
             try:
@@ -509,9 +544,11 @@ class AudioBridge:
             try:
                 self.send(self.status_line())
                 if self.now:
-                    line = self._np_line(self.now.snapshot())
+                    snap = self.now.snapshot()
+                    line = self._np_line(snap)
                     if line:
                         self.send(line)
+                    self._send_strips(snap)
             except Exception:
                 pass                    # the board went away; not our problem
 

@@ -309,6 +309,28 @@ bool        padUsed    = false;   // is there at least one PAD() in the tables?
    session only reports where it has got to when something happens to it, so a
    bar driven straight off those reports would jump every few seconds and stand
    still in between. See npNowMs(). */
+/* The title as PIXELS, drawn on the PC.
+
+   The board's font is ASCII and always will be - 5x7 leaves no room for a
+   second alphabet, and the wire would need a code page. So for anything that
+   isn't plain Latin the PC renders the line with a real font and sends the
+   strip, and the board scrolls pixels instead of characters. Cyrillic, Greek,
+   Japanese: the board never has to know.
+
+   One byte per column, bit 0 the top row - the same shape as the panel's own
+   memory. Width 0 means "nothing sent", and the ASCII text below is used. */
+// The title rarely fits. Each line that might slide keeps its own place in the
+// slide, so the title and the artist don't march in lockstep.
+struct Marquee { uint16_t hash; uint32_t t0; };
+// 0 title text, 1 artist text, 2 title strip, 3 artist strip.
+static Marquee marq[4];
+
+#define NP_BMP_MAX 250
+uint8_t  npTitleBmp[NP_BMP_MAX];
+uint16_t npTitleW    = 0;
+uint8_t  npArtBmp[NP_BMP_MAX];
+uint16_t npArtW      = 0;
+
 char     npTitle[44]  = "";
 char     npArtist[24] = "";
 int32_t  npPosMs      = 0;      // as last told, in milliseconds
@@ -1626,7 +1648,35 @@ static void gameSetField(char *key, char *val) {
 /* '%' lines come from the PC app and are NOT telemetry: they must not make
    the panel think a game is running. Hence a prefix of their own.
        %au=2/7;nm=Spotify;vl=64;mu=0                                          */
+// The other direction from b64Emit(). Returns how many bytes came out.
+static uint16_t b64Decode(const char *in, uint8_t *out, uint16_t cap) {
+  uint32_t acc = 0;
+  uint8_t  bits = 0;
+  uint16_t n = 0;
+  for (; *in; in++) {
+    char c = *in;
+    int8_t v;
+    if      (c >= 'A' && c <= 'Z') v = c - 'A';
+    else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+    else if (c >= '0' && c <= '9') v = c - '0' + 52;
+    else if (c == '+')             v = 62;
+    else if (c == '/')             v = 63;
+    else                           continue;      // '=' padding, or a stray
+    acc = (acc << 6) | (uint8_t)v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      if (n < cap) out[n++] = (uint8_t)(acc >> bits);
+    }
+  }
+  return n;
+}
+
 void audParse(char *s) {
+  // Which strip the "d=" in this line belongs to. Set by "ts=" earlier in the
+  // same line; the PC always sends them in that order.
+  uint8_t  tsKind = 0;
+  uint16_t tsW    = 0;
   char *save = NULL;
   for (char *tok = strtok_r(s, ";", &save); tok; tok = strtok_r(NULL, ";", &save)) {
     char *eq = strchr(tok, '=');
@@ -1658,9 +1708,26 @@ void audParse(char *s) {
     } else if (!strcasecmp(key, "sr")) {
       audSrc = (val[0] == 'a') ? 'a' : 'm';
     }
+    // ---- a rendered line of text: "%ts=1;w=63;d=<base64>"
+    else if (!strcasecmp(key, "ts")) {
+      tsKind = (uint8_t)atoi(val);
+    } else if (!strcasecmp(key, "w")) {
+      tsW = (uint16_t)atoi(val);
+    } else if (!strcasecmp(key, "d")) {
+      uint8_t *dst = (tsKind == 2) ? npArtBmp : npTitleBmp;
+      uint16_t got = b64Decode(val, dst, NP_BMP_MAX);
+      if (got > tsW) got = tsW;              // trust the declared width
+      if (tsKind == 2) { npArtW = got;   marq[3].t0 = millis(); marq[3].hash = 0; }
+      else             { npTitleW = got; marq[2].t0 = millis(); marq[2].hash = 0; }
+      tsKind = 0;
+      tsW = 0;
+    }
     // ---- what's playing
     else if (!strcasecmp(key, "np")) {
-      if (atoi(val) == 0) { npTitle[0] = 0; npArtist[0] = 0; npDur = 0; }
+      if (atoi(val) == 0) {
+        npTitle[0] = 0; npArtist[0] = 0; npDur = 0;
+        npTitleW = 0;   npArtW = 0;       // and their pixels, or they'd linger
+      }
       npSeen = millis();
     } else if (!strcasecmp(key, "st")) {
       npPlaying = (atoi(val) != 0);
@@ -1672,9 +1739,13 @@ void audParse(char *s) {
     } else if (!strcasecmp(key, "du")) {
       npDur = (int32_t)atol(val);
     } else if (!strcasecmp(key, "ti")) {
+      // A different title arriving without a strip to match means the strip
+      // belongs to the last song. Drop it rather than show the wrong words.
+      if (strcmp(npTitle, val)) npTitleW = 0;
       strncpy(npTitle, val, sizeof(npTitle) - 1);
       npTitle[sizeof(npTitle) - 1] = 0;
     } else if (!strcasecmp(key, "ar")) {
+      if (strcmp(npArtist, val)) npArtW = 0;
       strncpy(npArtist, val, sizeof(npArtist) - 1);
       npArtist[sizeof(npArtist) - 1] = 0;
     }
@@ -1960,11 +2031,6 @@ void usrUpdate() {
    long enough to want the whole width.
    ========================================================================== */
 
-// The title rarely fits. Each line that might slide keeps its own place in the
-// slide, so the title and the artist don't march in lockstep.
-struct Marquee { uint16_t hash; uint32_t t0; };
-static Marquee marq[2];
-
 static uint16_t strHash(const char *s) {
   uint16_t h = 0;
   while (*s) h = (uint16_t)(h * 31u + (uint8_t)*s++);
@@ -2000,6 +2066,42 @@ static void drawScroll(const char *s, int16_t x, int16_t y, int16_t w, uint8_t s
   oled->setCursor(x - off + tw + GAP, y);   // the copy chasing it
   oled->print(s);
   oled->setTextWrap(true);                  // as every other page expects it
+}
+
+/* The pixel version of drawScroll. Same timing, so a line that arrives as a
+   strip slides exactly like one that arrives as text.
+
+   Only the lit pixels are drawn - about a quarter of the area - so a full line
+   is a couple of hundred drawPixel calls, which costs nothing next to the 15 ms
+   the frame spends on the I2C bus. And because it only ever touches columns
+   inside the window, nothing spills over the disc: no painting out afterwards.
+*/
+static void drawStrip(const uint8_t *bmp, uint16_t w,
+                      int16_t x, int16_t y, int16_t win, uint8_t slot) {
+  if (!w) return;
+  const int16_t GAP = 18;
+  const uint32_t LEAD = 1200, PXMS = 28;
+
+  int16_t off = 0;
+  int32_t total = (int32_t)w + GAP;
+  if ((int16_t)w > win) {
+    uint32_t el = millis() - marq[slot].t0;
+    if (el > LEAD) off = (int16_t)(((el - LEAD) / PXMS) % (uint32_t)total);
+  }
+
+  for (int16_t sx = 0; sx < win; sx++) {
+    int32_t src = (int32_t)sx + off;
+    if ((int16_t)w > win) {
+      src %= total;
+      if (src >= (int32_t)w) continue;          // the gap between repeats
+    } else if (src >= (int32_t)w) {
+      break;
+    }
+    uint8_t col = bmp[src];
+    if (!col) continue;
+    for (uint8_t r = 0; r < 8; r++)
+      if (col & (1 << r)) oled->drawPixel(x + sx, y + r, SSD1306_WHITE);
+  }
 }
 
 static void printMmSs(int32_t sec) {
@@ -2105,7 +2207,10 @@ void drawMusic() {
 
   if (npKind == 'y') {
     // A video: title across the whole width, then the time, then the bar.
-    drawScroll(npTitle, 0, gTop + 1, SCREEN_W, 0);
+    // Pixels if the PC sent them - that is the only way a Russian title is
+    // readable rather than spelled out in Latin - and the text otherwise.
+    if (npTitleW) drawStrip(npTitleBmp, npTitleW, 0, gTop + 1, SCREEN_W, 2);
+    else          drawScroll(npTitle,            0, gTop + 1, SCREEN_W, 0);
 
     // Touch the volume and it takes this line for a couple of seconds. The
     // time comes back on its own: a volume you changed is what you want to see
@@ -2128,9 +2233,12 @@ void drawMusic() {
   const int16_t tx = 2 * r + 5;               // text starts clear of the disc
   const int16_t tw = SCREEN_W - tx;
 
-  drawScroll(npTitle, tx, gTop + 1, tw, 0);
-  if (audShowing())        drawAudioLine(tx, gTop + 11, false);
-  else if (npArtist[0])    drawScroll(npArtist, tx, gTop + 11, tw, 1);
+  if (npTitleW) drawStrip(npTitleBmp, npTitleW, tx, gTop + 1, tw, 2);
+  else          drawScroll(npTitle,            tx, gTop + 1, tw, 0);
+
+  if (audShowing())     drawAudioLine(tx, gTop + 11, false);
+  else if (npArtW)      drawStrip(npArtBmp, npArtW, tx, gTop + 11, tw, 3);
+  else if (npArtist[0]) drawScroll(npArtist,        tx, gTop + 11, tw, 1);
 
   // Both lines slide off to the left, over where the disc goes. Paint the
   // column out and put the disc on top - cheaper than clipping by hand, and
@@ -3312,6 +3420,8 @@ void printHelp() {
   Serial.println(F("  MUSIC page"));
   Serial.println(F("    %np=1;st=1;sk=s|y;ps=<sec>;du=<sec>;ti=<title>;ar=<artist>"));
   Serial.println(F("    sk=s draws the disc and the artist, sk=y the time instead"));
+  Serial.println(F("    %ts=1|2;w=<px>;d=<base64>  a line drawn on the PC, one"));
+  Serial.println(F("    byte per column - how Cyrillic gets on a 5x7 ASCII panel"));
   Serial.println(F("    on the MUSIC page - and on the last GAME sub-page - the"));
   Serial.println(F("    B buttons and the knob move the volume WITHOUT HID armed"));
   Serial.println(F("  GAME TELEMETRY"));
@@ -3330,7 +3440,10 @@ void handleSerial() {
   static char tBuf[224];
   static uint8_t tLen = 0;
   static bool tCap = false;
-  static char aBuf[192];      // a title can be 40 characters on its own
+  // A 250 px strip is 336 base64 characters plus 13 of header - 349, which fit
+  // in 352 only by luck. One more field on that line and it would have been cut
+  // in silence, and a cut base64 string draws garbage.
+  static char aBuf[420];
   static uint8_t aLen = 0;
   static bool aCap = false;
 

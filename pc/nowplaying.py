@@ -164,6 +164,10 @@ class NowPlaying:
         return {
             "title": title,
             "artist": artist,
+            # What was actually written, before transliteration. The PC draws
+            # the strip from this, so the panel shows the real alphabet.
+            "raw_title": raw,
+            "raw_artist": str(props.artist or ""),
             "playing": info.playback_status == PLAYING,
             "pos": pos + age,
             "dur": dur,

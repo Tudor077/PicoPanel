@@ -18,6 +18,11 @@ DEFAULTS = {
     # None means nobody has chosen: the knob then follows whatever is playing,
     # so opening Spotify puts it on Spotify without a single button press.
     "audio_target": None,
+
+    # True: titles are drawn on the PC with a real font and sent as pixels, so
+    # Cyrillic and the rest appear as written. False: the board's own 5x7 ASCII
+    # font, with anything else spelled out in Latin letters.
+    "unicode_titles": True,
 }
 
 

@@ -299,6 +299,7 @@ class App(tk.Tk):
             log=lambda msg: self.q.put(("err", msg)),
             selected=self.cfg.get("audio_target"),
             on_select=self._remember_audio_target)
+        self.audio.unicode_titles = bool(self.cfg.get("unicode_titles", True))
         self.link = Link(self.q, on_audio=self.audio.request)
         self.hub = Hub()
         self.hub.yield_outgauge = bool(self.cfg.get("yield_outgauge"))
@@ -466,6 +467,11 @@ class App(tk.Tk):
                         variable=self.yield_var,
                         command=self._toggle_yield).pack(padx=6, pady=2)
 
+        self.uni_var = tk.BooleanVar(value=bool(self.cfg.get("unicode_titles", True)))
+        ttk.Checkbutton(right, text="Titles in their own alphabet",
+                        variable=self.uni_var,
+                        command=self._toggle_unicode).pack(padx=6, pady=2)
+
         logf = ttk.LabelFrame(self, text="Log")
         logf.pack(fill="both", expand=True, **pad)
         self.log = tk.Text(logf, height=10, wrap="none", state="disabled",
@@ -517,6 +523,20 @@ class App(tk.Tk):
             self.withdraw()
         else:
             self._quit()
+
+    def _toggle_unicode(self):
+        """Real alphabets, or the board's own font with everything in Latin.
+
+        Off is worth having: the transliteration is easier to read for someone
+        who doesn't read Cyrillic, and the 5x7 font matches the rest of the
+        panel. On is the default because a title should say what it says.
+        """
+        on = bool(self.uni_var.get())
+        self.cfg["unicode_titles"] = on
+        settings.save(self.cfg)
+        self.audio.unicode_titles = on
+        self._log("titles: %s" % ("their own alphabet" if on
+                                  else "Latin letters, panel font"), "info")
 
     def _remember_audio_target(self, label):
         """Called from the audio thread when you pick a different app.

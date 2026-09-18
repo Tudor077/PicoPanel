@@ -161,7 +161,30 @@ frames a second off two updates a second.
 Needs `winrt-Windows.Media.Control`. Without it the page says the app isn't
 running; everything else carries on.
 
-### Titles that aren't in English
+### Cyrillic, and every other alphabet
+
+The board has a 5x7 ASCII font and that is not going to change - there is no
+room in 5x7 for a second alphabet, and the wire would need a code page. So for
+anything that isn't plain Latin the **PC draws the line itself**, with a real
+font, and sends the pixels. The board scrolls a strip exactly as it scrolls
+text and never has to know what an alphabet is.
+
+Tahoma at 9 px, antialiasing off. It was chosen by rendering the alternatives at
+this size and looking: Tahoma is hinted for small sizes, which at one bit per
+pixel is the whole game. Segoe UI and Arial come out blurrier, Consolas wider
+for no gain.
+
+The strip is one byte per column, bit 0 at the top - the same shape as the
+panel's own memory - and base64 on the wire, so the protocol stays ASCII. A
+rendered title is about 250 bytes and is sent only when the track changes, not
+on every heartbeat. `Король и Шут` comes to 63 px, narrower than the 72 px its
+transliteration needs in the panel font.
+
+**Titles in their own alphabet** in the app turns it off, and then the board's
+own font draws the transliteration below. Worth having: `Korol i Shut` is easier
+to read if you don't read Cyrillic.
+
+### When it falls back to Latin letters
 
 The panel draws the GFX built-in font, which is ASCII. Anything else used to be
 deleted character by character - fine for a stray typographic dash, a disaster
