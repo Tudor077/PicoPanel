@@ -538,6 +538,16 @@ class AudioBridge:
             if line:
                 self.send(line)
 
+    # 0 off, 1 words to show, 2 this track has none, 3 still asking.
+    def _karaoke_state(self, snap):
+        if not self.lyrics or not self.lyrics.enabled or not snap:
+            return 0
+        got = self.lyrics.get(snap.get("raw_artist"), snap.get("raw_title"),
+                              snap.get("dur"))
+        if got is None:
+            return 3
+        return 1 if got else 2
+
     def _send_lyrics(self, snap):
         """The line being sung and the one after, each with when it starts.
 
@@ -598,7 +608,14 @@ class AudioBridge:
                     snap = self.now.snapshot()
                     line = self._np_line(snap)
                     if line:
-                        self.send(line)
+                        # The karaoke state rides on this line, which goes out
+                        # every heartbeat. The strips themselves only go when
+                        # the words change - so through a long instrumental
+                        # nothing was sent at all, and the board timed the
+                        # words out and said karaoke was off over a song that
+                        # was playing perfectly well. Silence is not an answer;
+                        # this says so explicitly.
+                        self.send(line + ";ka=%d" % self._karaoke_state(snap))
                     self._send_strips(snap)
                     self._send_lyrics(snap)
             except Exception:

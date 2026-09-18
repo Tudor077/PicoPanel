@@ -281,6 +281,27 @@ with a third thing for twenty-two rows.
 Both lines are rendered here with a real font and sent as pixels, like the
 titles, so a Russian song is a Russian song.
 
+### Silence is not an answer
+
+The strips are only sent when the words change, which is right - each is a
+couple of hundred bytes. But the board used to decide karaoke had gone away
+when none had arrived for eight seconds, and a long instrumental sends nothing
+at all: the page announced that karaoke was off over a song that was playing
+perfectly well.
+
+You cannot tell "nothing more is coming" from "nothing came". So the PC now
+says which, on the line it sends every heartbeat anyway:
+
+| | |
+|---|---|
+| `ka=0` | karaoke is switched off |
+| `ka=1` | there are words - draw them |
+| `ka=2` | this track has no synced lyrics |
+| `ka=3` | still asking lrclib |
+
+Each of the last three has its own message on the page, instead of one that
+guessed.
+
 **The screen stays on** while the words are up and something is playing. Every
 other page sleeps after twenty idle seconds, which is right for a page that
 never changes on its own; this one changes by itself, and a karaoke display that

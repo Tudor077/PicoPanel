@@ -340,8 +340,15 @@ int32_t  lyrCurAt = 0;
 uint8_t  lyrNextBmp[LYR_BMP_MAX];
 uint16_t lyrNextW = 0;
 int32_t  lyrNextAt = 0;
-uint32_t lyrSeen = 0;
-#define LYR_STALE_MS 8000UL
+/* What the PC says about the words: 0 off, 1 there are some, 2 this track has
+   none, 3 still asking.
+
+   This used to be worked out from whether a line had arrived lately, which was
+   wrong in a way that took a real song to find: the strips are only sent when
+   the words CHANGE, so a long instrumental sent nothing, and the board decided
+   karaoke had gone away. You cannot tell "nothing more is coming" from "nothing
+   came". Now the PC says which, on a line it sends every heartbeat anyway. */
+uint8_t  lyrState = 0;
 
 /* The line on its way out, kept so it can be seen leaving.
 
@@ -481,7 +488,9 @@ SwGroup sw3 = { "SW3", SW3_PINS, 6, 5, 0, {0}, 0x3F, 0, 0, -1, -1, 0, 0, 0, 0 };
 static bool audFresh() { return audSeen && (millis() - audSeen) < AUD_STALE_MS; }
 static bool npFresh()  { return npSeen  && (millis() - npSeen)  < NP_STALE_MS;  }
 static bool audShowing() { return audTouch && (millis() - audTouch) < AUD_SHOW_MS; }
-static bool lyrFresh() { return lyrSeen && (millis() - lyrSeen) < LYR_STALE_MS; }
+// The words are live when the PC is still talking to us AND says there are
+// some. npFresh covers the first: that line does go out every heartbeat.
+static bool lyrFresh() { return npFresh() && lyrState == 1; }
 
 // Where the track has got to, right now. Runs forward from the last report
 // while it's playing, and stands still when it isn't.
@@ -1760,7 +1769,8 @@ void audParse(char *s) {
       tsKind = (uint8_t)atoi(val);
     } else if (!strcasecmp(key, "ky")) {
       tsKind = (uint8_t)(2 + atoi(val));      // 3 = this line, 4 = the next
-      lyrSeen = millis();
+    } else if (!strcasecmp(key, "ka")) {
+      lyrState = (uint8_t)atoi(val);
     } else if (!strcasecmp(key, "at")) {
       tsAt = (int32_t)atol(val);
     } else if (!strcasecmp(key, "w")) {
@@ -2320,9 +2330,14 @@ void drawKaraoke() {
   }
   if (!lyrFresh()) {
     oled->setCursor(0, gTop + 2);
-    oled->print(F("karaoke is off"));
-    oled->setCursor(0, gTop + 12);
-    oled->print(F("turn it on in the app"));
+    switch (lyrState) {
+      case 1:  oled->print(F("waiting for the app")); break;
+      case 2:  oled->print(F("no lyrics for this"));  break;
+      case 3:  oled->print(F("looking for lyrics"));  break;
+      default: oled->print(F("karaoke is off"));
+               oled->setCursor(0, gTop + 12);
+               oled->print(F("turn it on in the app"));
+    }
     return;
   }
 
