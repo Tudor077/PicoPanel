@@ -117,16 +117,16 @@ desktop. Two rules keep it quiet:
   whatever you were playing. Now the level is remembered, and the app is only
   asked when there is nothing remembered or when you actually turn the knob.
   Measured: 0 calls in ten idle seconds, 12 for six turns of the knob.
-* **Not behind a fullscreen window.** If the window in front covers the monitor
-  and is not merely maximised, the volume goes to the mixer channel instead and
-  the panel says `mix`. Maximised is deliberately not fullscreen - a maximised
-  window's rectangle overhangs the monitor by its border, so measuring area
-  alone calls every maximised browser a game. The shell's own windows are
-  excluded too, or clicking the wallpaper would count.
+A second guard - refusing to touch the app while a fullscreen game was in front
+- was written and then removed. It blocked the volume in exactly the place you
+most want it, leaving the mixer channel sitting at 100 and moving four percent
+at a time, which is nothing you can hear. That was a definite regression bought
+against a cause that was only ever guessed at; the polling was the one that had
+been measured.
 
-If anything still misbehaves, **Move the app's own volume slider** turns the
-whole path off and leaves only the mixer channel, which never touches another
-program's window.
+If reaching into the app does turn out to be a problem on its own, **Move the
+app's own volume slider** turns the whole path off and leaves only the mixer
+channel, which never touches another program's window.
 
 A browser only exposes the YouTube player's slider while that tab is the active
 one, so YouTube usually lands on the mixer channel. It is tried first either

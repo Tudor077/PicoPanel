@@ -35,8 +35,6 @@ try:
     import comtypes
     import comtypes.client
     import psutil
-    import win32api
-    import win32con
     import win32gui
     import win32process
     HAVE_UIA = True
@@ -53,55 +51,19 @@ STEP = 10
 RETRY_S = 5.0
 
 
-# The shell's own windows cover the whole screen and are never maximised - the
-# desktop itself is one of them - so they would read as a game every time you
-# clicked on the wallpaper.
-_SHELL = {"explorer.exe", "textinputhost.exe", "shellexperiencehost.exe",
-          "searchhost.exe", "startmenuexperiencehost.exe",
-          "applicationframehost.exe", "lockapp.exe"}
-
-
-def _fullscreen_in_front(procname):
-    """Is a DIFFERENT application filling the screen right now?
-
-    Reaching into another process' UI is a cross-process call that makes it
-    build and maintain an accessibility tree. Do that behind a game and you get
-    thrown back to the desktop. If the window in front IS the app we are about
-    to touch, there is nothing to interrupt and this says no.
-    """
-    if not HAVE_UIA:
-        return False
-    try:
-        hwnd = win32gui.GetForegroundWindow()
-        if not hwnd:
-            return False
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        front = psutil.Process(pid).name().lower()
-        if front == (procname or "").lower():
-            return False
-        if front in _SHELL:
-            return False
-        # Maximised is not fullscreen. A maximised window's rect overhangs the
-        # monitor by the border width, so measuring area alone calls every
-        # maximised browser a game; IsZoomed tells them apart. A borderless
-        # fullscreen game is a RESTORED window sized to the screen, and so is
-        # an exclusive one.
-        # (GetWindowPlacement, because this pywin32 has no IsZoomed.)
-        if win32gui.GetWindowPlacement(hwnd)[1] == win32con.SW_SHOWMAXIMIZED:
-            return False
-        l, t, r, b = win32gui.GetWindowRect(hwnd)
-        mon = win32api.GetMonitorInfo(
-            win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST))
-        ml, mt, mr, mb = mon["Monitor"]
-        # Clipped to the monitor, so overhang can't inflate the count either.
-        w = max(0, min(r, mr) - max(l, ml))
-        h = max(0, min(b, mb) - max(t, mt))
-        screen = max(1, (mr - ml)) * max(1, (mb - mt))
-        # 98%, not 100%: a borderless window is often a pixel or two out.
-        return w * h >= screen * 0.98
-    except Exception:
-        return False
-
+# A guard against touching the app while a fullscreen game was in front used to
+# live here. It is gone, and the reasoning is worth keeping.
+#
+# The measured cause of being thrown out of a game was this module polling
+# Spotify twice a second in the background, for ever. That is fixed and stays
+# fixed. The guard was a second, GUESSED cause: it blocked the volume exactly
+# where you most want it - in a game - and left the mixer channel at 100 moving
+# four percent at a time, which is nothing you can hear. A definite regression
+# bought protection against something never actually observed.
+#
+# If reaching into the app does turn out to be a problem on its own, the switch
+# for it is in the app: "Move the app's own volume slider", which leaves only
+# the mixer channel and touches no other window at all.
 
 class InAppVolume:
     """Per-application volume through the app's own UI.
@@ -253,16 +215,18 @@ class InAppVolume:
             with self._lock:
                 if key in self._want:
                     return self._want[key]
-        if _fullscreen_in_front(procname):
-            return None                    # not while a game owns the screen
         for force in (False, True):        # a stale element gets one re-find
             rv = self._pattern(procname, force)
             if rv is None:
                 return None
             try:
                 v = int(round(rv.CurrentValue * 100))
+                # SEED only, never overwrite. _want is what we last ASKED for,
+                # and the app reports its own value a beat late - letting a read
+                # write over our intention made every detent set the same number
+                # again, so the knob turned and nothing moved.
                 with self._lock:
-                    self._want[key] = v
+                    self._want.setdefault(key, v)
                 return v
             except Exception:
                 with self._lock:
@@ -272,8 +236,6 @@ class InAppVolume:
     def set(self, procname, pct):
         """Set 0..100. Returns what we asked for, or None."""
         pct = max(0, min(100, int(pct)))
-        if _fullscreen_in_front(procname):
-            return None                    # the mixer channel will take it
         for force in (False, True):
             rv = self._pattern(procname, force)
             if rv is None:
