@@ -140,6 +140,7 @@ class Mixer:
             self.inapp = appvolume.InAppVolume()
         except Exception:
             self.inapp = None
+        self._inapp_saved = self.inapp
 
     # -- COM housekeeping -------------------------------------------------
     def _com(self):
@@ -212,6 +213,10 @@ class Mixer:
 
     def count(self):
         return len(self.refresh())
+
+    def set_use_inapp(self, on):
+        """Turn the app's own slider on or off without losing the object."""
+        self.inapp = self._inapp_saved if on else None
 
     def source(self, index):
         """"app" if the app's own slider is what moves, "mix" if the channel."""

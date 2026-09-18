@@ -35,6 +35,8 @@ try:
     import comtypes
     import comtypes.client
     import psutil
+    import win32api
+    import win32con
     import win32gui
     import win32process
     HAVE_UIA = True
@@ -49,6 +51,56 @@ STEP = 10
 # slider at all is only re-checked this often, or every detent would pay for a
 # search that is going to fail again.
 RETRY_S = 5.0
+
+
+# The shell's own windows cover the whole screen and are never maximised - the
+# desktop itself is one of them - so they would read as a game every time you
+# clicked on the wallpaper.
+_SHELL = {"explorer.exe", "textinputhost.exe", "shellexperiencehost.exe",
+          "searchhost.exe", "startmenuexperiencehost.exe",
+          "applicationframehost.exe", "lockapp.exe"}
+
+
+def _fullscreen_in_front(procname):
+    """Is a DIFFERENT application filling the screen right now?
+
+    Reaching into another process' UI is a cross-process call that makes it
+    build and maintain an accessibility tree. Do that behind a game and you get
+    thrown back to the desktop. If the window in front IS the app we are about
+    to touch, there is nothing to interrupt and this says no.
+    """
+    if not HAVE_UIA:
+        return False
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        if not hwnd:
+            return False
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        front = psutil.Process(pid).name().lower()
+        if front == (procname or "").lower():
+            return False
+        if front in _SHELL:
+            return False
+        # Maximised is not fullscreen. A maximised window's rect overhangs the
+        # monitor by the border width, so measuring area alone calls every
+        # maximised browser a game; IsZoomed tells them apart. A borderless
+        # fullscreen game is a RESTORED window sized to the screen, and so is
+        # an exclusive one.
+        # (GetWindowPlacement, because this pywin32 has no IsZoomed.)
+        if win32gui.GetWindowPlacement(hwnd)[1] == win32con.SW_SHOWMAXIMIZED:
+            return False
+        l, t, r, b = win32gui.GetWindowRect(hwnd)
+        mon = win32api.GetMonitorInfo(
+            win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST))
+        ml, mt, mr, mb = mon["Monitor"]
+        # Clipped to the monitor, so overhang can't inflate the count either.
+        w = max(0, min(r, mr) - max(l, ml))
+        h = max(0, min(b, mb) - max(t, mt))
+        screen = max(1, (mr - ml)) * max(1, (mb - mt))
+        # 98%, not 100%: a borderless window is often a pixel or two out.
+        return w * h >= screen * 0.98
+    except Exception:
+        return False
 
 
 class InAppVolume:
@@ -186,14 +238,32 @@ class InAppVolume:
     def available(self, procname):
         return self._pattern(procname) is not None
 
-    def get(self, procname):
-        """0..100, or None if this app has no slider of its own."""
+    def get(self, procname, live=False):
+        """0..100, or None if this app has no slider of its own.
+
+        By default this answers from what we last set or read. It used to go and
+        ask every time, which sounds harmless until you count it: the panel's
+        heartbeat runs twice a second, so that was two cross-process calls a
+        second into Spotify FOR EVER, keeping Chromium's accessibility tree
+        awake behind whatever you were playing. Now the app is only asked when
+        there is nothing remembered, or when somebody actually turns the knob.
+        """
+        key = (procname or "").lower()
+        if not live:
+            with self._lock:
+                if key in self._want:
+                    return self._want[key]
+        if _fullscreen_in_front(procname):
+            return None                    # not while a game owns the screen
         for force in (False, True):        # a stale element gets one re-find
             rv = self._pattern(procname, force)
             if rv is None:
                 return None
             try:
-                return int(round(rv.CurrentValue * 100))
+                v = int(round(rv.CurrentValue * 100))
+                with self._lock:
+                    self._want[key] = v
+                return v
             except Exception:
                 with self._lock:
                     self._cache.pop((procname or "").lower(), None)
@@ -202,6 +272,8 @@ class InAppVolume:
     def set(self, procname, pct):
         """Set 0..100. Returns what we asked for, or None."""
         pct = max(0, min(100, int(pct)))
+        if _fullscreen_in_front(procname):
+            return None                    # the mixer channel will take it
         for force in (False, True):
             rv = self._pattern(procname, force)
             if rv is None:
@@ -227,7 +299,9 @@ class InAppVolume:
         theirs instead.
         """
         key = (procname or "").lower()
-        cur = self.get(procname)
+        # A real read here, once per turn of the knob: this is the moment it is
+        # worth knowing whether somebody moved the slider by hand.
+        cur = self.get(procname, live=True)
         if cur is None:
             return None
         with self._lock:

@@ -23,6 +23,11 @@ DEFAULTS = {
     # Cyrillic and the rest appear as written. False: the board's own 5x7 ASCII
     # font, with anything else spelled out in Latin letters.
     "unicode_titles": True,
+
+    # True: move the slider inside the app where it has one - Spotify's own.
+    # False: only ever the app's channel in the Windows mixer, which never
+    # reaches into another program's window at all.
+    "app_own_volume": True,
 }
 
 

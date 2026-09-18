@@ -300,6 +300,7 @@ class App(tk.Tk):
             selected=self.cfg.get("audio_target"),
             on_select=self._remember_audio_target)
         self.audio.unicode_titles = bool(self.cfg.get("unicode_titles", True))
+        self.audio.mixer.set_use_inapp(bool(self.cfg.get("app_own_volume", True)))
         self.link = Link(self.q, on_audio=self.audio.request)
         self.hub = Hub()
         self.hub.yield_outgauge = bool(self.cfg.get("yield_outgauge"))
@@ -472,6 +473,11 @@ class App(tk.Tk):
                         variable=self.uni_var,
                         command=self._toggle_unicode).pack(padx=6, pady=2)
 
+        self.inapp_var = tk.BooleanVar(value=bool(self.cfg.get("app_own_volume", True)))
+        ttk.Checkbutton(right, text="Move the app's own volume slider",
+                        variable=self.inapp_var,
+                        command=self._toggle_inapp).pack(padx=6, pady=2)
+
         logf = ttk.LabelFrame(self, text="Log")
         logf.pack(fill="both", expand=True, **pad)
         self.log = tk.Text(logf, height=10, wrap="none", state="disabled",
@@ -537,6 +543,20 @@ class App(tk.Tk):
         self.audio.unicode_titles = on
         self._log("titles: %s" % ("their own alphabet" if on
                                   else "Latin letters, panel font"), "info")
+
+    def _toggle_inapp(self):
+        """The app's own slider, or only its channel in the mixer.
+
+        Off is the safe setting if anything odd happens in a game: the mixer
+        never reaches into another program's window, so there is nothing that
+        could pull you out of what you were doing.
+        """
+        on = bool(self.inapp_var.get())
+        self.cfg["app_own_volume"] = on
+        settings.save(self.cfg)
+        self.audio.mixer.set_use_inapp(on)
+        self._log("volume: %s" % ("the app's own slider where it has one" if on
+                                  else "the Windows mixer channel only"), "info")
 
     def _remember_audio_target(self, label):
         """Called from the audio thread when you pick a different app.

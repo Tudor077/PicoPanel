@@ -105,6 +105,29 @@ its mixer channel, which is a genuine per-application volume in its own right:
 setting Spotify to 45% that way left Windows, BeamNG, Discord and Steam all at
 100.
 
+### It must not reach into other programs while you're playing
+
+Reaching across processes makes the other application build and keep an
+accessibility tree, and doing that behind a game can throw you back to the
+desktop. Two rules keep it quiet:
+
+* **Nothing happens in the background.** The panel's heartbeat used to read the
+  level over UI Automation twice a second - two cross-process calls into Spotify
+  every second, for ever, keeping Chromium's accessibility tree awake behind
+  whatever you were playing. Now the level is remembered, and the app is only
+  asked when there is nothing remembered or when you actually turn the knob.
+  Measured: 0 calls in ten idle seconds, 12 for six turns of the knob.
+* **Not behind a fullscreen window.** If the window in front covers the monitor
+  and is not merely maximised, the volume goes to the mixer channel instead and
+  the panel says `mix`. Maximised is deliberately not fullscreen - a maximised
+  window's rectangle overhangs the monitor by its border, so measuring area
+  alone calls every maximised browser a game. The shell's own windows are
+  excluded too, or clicking the wallpaper would count.
+
+If anything still misbehaves, **Move the app's own volume slider** turns the
+whole path off and leaves only the mixer channel, which never touches another
+program's window.
+
 A browser only exposes the YouTube player's slider while that tab is the active
 one, so YouTube usually lands on the mixer channel. It is tried first either
 way.
