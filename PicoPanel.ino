@@ -197,6 +197,12 @@ static const uint8_t SW3_PINS[] = { 10, 11, 12, 13, 14, 15 };
 // IDE inserts its generated prototypes right after the includes, and those
 // refer to 'Action'. Declared further down, the build fails with "does not name
 // a type".
+// What the board can ask the PC app to do. Not HID - a line on the serial
+// link the app already reads - so it works with HID disarmed.
+enum { APP_UP = 1, APP_DN, APP_PREV, APP_NEXT, APP_MUTE, APP_HOME };
+void audioAsk(uint8_t code);
+static bool audioPage();        // defined further down, with the pages it reads
+
 #if HID_AVAILABLE
 
 // Consumer Control codes, from tinyusb/src/class/hid/hid.h
@@ -233,7 +239,7 @@ struct Action {
 // process. Only the PC can reach those, so the board just asks, and the PC
 // app answers with the name and level to display. The board never learns
 // which apps exist: a new one appears on the panel with no firmware change.
-enum { APP_UP = 1, APP_DN, APP_PREV, APP_NEXT, APP_MUTE, APP_HOME };
+// The codes themselves live outside this fence: asking is not HID.
 #define APP(c, lbl)  { AK_APP,   (uint16_t)(c),           0,                       lbl }
 
 /* ------------------------------------------------------------------------ *
@@ -319,7 +325,9 @@ bool     audMute     = false;
 uint8_t  audIdx      = 0;       // which target, 1-based for display
 uint8_t  audCount    = 0;
 uint32_t audSeen     = 0;
+uint32_t audTouch    = 0;       // when the volume last changed, or you arrived
 #define AUD_STALE_MS 4000UL
+#define AUD_SHOW_MS  2500UL     // how long the MUSIC page shows it over the artist
 
 bool usrLevel   = false;    // held down right now, after debounce
 bool mediaLayer = false;    // layer two, LATCHED: stays until you toggle it back
@@ -416,6 +424,7 @@ SwGroup sw3 = { "SW3", SW3_PINS, 6, 5, 0, {0}, 0x3F, 0, 0, -1, -1, 0, 0, 0, 0 };
 // Has the PC app spoken lately? Everything per-app depends on it being there.
 static bool audFresh() { return audSeen && (millis() - audSeen) < AUD_STALE_MS; }
 static bool npFresh()  { return npSeen  && (millis() - npSeen)  < NP_STALE_MS;  }
+static bool audShowing() { return audTouch && (millis() - audTouch) < AUD_SHOW_MS; }
 
 // Where the track has got to, right now. Runs forward from the last report
 // while it's playing, and stands still when it isn't.
@@ -1257,6 +1266,27 @@ void hidSetArmed(bool on) {
 
 // on = true on press / on entering a position; false only for PAD, so it can be
 // released as well. Every other kind ignores on == false.
+/* Ask the PC app to move a volume.
+
+   Deliberately not HID: it is a line on the serial link the app already reads,
+   which is why the volume works with HID disarmed. The media-key fallback below
+   IS HID, so it stays behind the arming - a disarmed panel does not type into
+   the PC, and that rule is worth more than a knob that works in every case. */
+void audioAsk(uint8_t code) {
+  Serial.print(F("!AUD "));
+  Serial.println(code);
+  audTouch = millis();            // show it on the screen without waiting
+#if HID_AVAILABLE
+  if (!audFresh() && hidArmed) {
+    uint16_t cc = 0;
+    if      (code == APP_UP)   cc = CC_VOL_UP;
+    else if (code == APP_DN)   cc = CC_VOL_DN;
+    else if (code == APP_MUTE) cc = CC_MUTE;
+    if (cc) { Keyboard.consumerPress(cc); delay(5); Keyboard.consumerRelease(); }
+  }
+#endif
+}
+
 void actFire(const Action &act, bool on, const char *label) {
   switch (act.kind) {
     case AK_NONE:
@@ -1297,17 +1327,7 @@ void actFire(const Action &act, bool on, const char *label) {
       break;
     case AK_APP:
       if (!on) return;
-      // The PC app owns the Windows mixer, so we ask rather than act.
-      Serial.print(F("!AUD ")); Serial.println(act.a);
-      // Nobody listening? Then don't leave the knob dead: send the ordinary
-      // media key, which is what this layer did before per-app volume existed.
-      if (!audFresh()) {
-        uint16_t cc = 0;
-        if      (act.a == APP_UP)   cc = CC_VOL_UP;
-        else if (act.a == APP_DN)   cc = CC_VOL_DN;
-        else if (act.a == APP_MUTE) cc = CC_MUTE;
-        if (cc) { Keyboard.consumerPress(cc); delay(5); Keyboard.consumerRelease(); }
-      }
+      audioAsk((uint8_t)act.a);
       break;
     default:
       return;
@@ -1369,6 +1389,13 @@ void hidUpdate(int32_t det) {
 
   // the 8 buttons: A1..A4 = P0..P3, B1..B4 = P4..P7
   // the layer is latched: toggled by double-tapping USER, not by holding it
+  // On an audio page the four B buttons and the knob belong to the volume,
+  // whatever the layer says. Releasing on the way in matters: a gamepad button
+  // held as you change page would stay pressed for ever.
+  bool audio = audioPage();
+  static bool audioWas = false;
+  if (audio != audioWas) { audioWas = audio; hidReleaseAll(); }
+
   bool shift = mediaLayer;
   Action      *A  = shift ? mapShiftA : mapBtnA;
   Action      *B  = shift ? mapShiftB : mapBtnB;
@@ -1377,8 +1404,9 @@ void hidUpdate(int32_t det) {
 
   for (uint8_t i = 0; i < 4; i++)
     hidButton(A[i], pcfHeld(i),     pcfPressed(i),     LA[i]);
-  for (uint8_t i = 0; i < 4; i++)
-    hidButton(B[i], pcfHeld(i + 4), pcfPressed(i + 4), LB[i]);
+  if (!audio)
+    for (uint8_t i = 0; i < 4; i++)
+      hidButton(B[i], pcfHeld(i + 4), pcfPressed(i + 4), LB[i]);
 
   // the switches. sw2 in code = your SW1 (3 positions); sw3 = SW2 (5 positions)
   static int8_t lastSw1 = -1, lastSw2 = -1;
@@ -1400,7 +1428,7 @@ void hidUpdate(int32_t det) {
 
   // the encoder: one action per detent, but at most a few per cycle so a sharp
   // spin doesn't flood the host
-  if (det) {
+  if (det && !audio) {
     int32_t mag = (det > 0) ? det : -det;
     if (mag > 4) mag = 4;
     for (int32_t i = 0; i < mag; i++)
@@ -1535,12 +1563,22 @@ int32_t  gameG        = 0;      // x10
 int32_t  gameAoa      = 0;
 
 static uint8_t gameSubCount() {
+  uint8_t n;
   switch (gameKind) {
-    case 'a': return 4;      // radios, transponder, autopilot
-    case 'w': return 3;      // no radios in War Thunder
-    case 'g': return 2;      // a tank has little to show
-    default:  return 3;
+    case 'a': n = 4; break;   // radios, transponder, autopilot
+    case 'w': n = 3; break;   // no radios in War Thunder
+    case 'g': n = 2; break;   // a tank has little to show
+    default:  n = 3; break;
   }
+  // And one more on the end: the volume. With HID armed, in a game, USER walks
+  // these and nothing else - so without this there is no way to reach the
+  // volume at all without disarming first.
+  return (uint8_t)(n + 1);
+}
+
+// Is the LAST sub-page - the volume one - the one being shown?
+static bool gameAudioSub() {
+  return gameFresh() && gameSub == (uint8_t)(gameSubCount() - 1);
 }
 uint32_t gameSeen     = 0;      // millis at the last line received
 uint32_t gameLines    = 0;
@@ -1592,18 +1630,27 @@ void audParse(char *s) {
     if (!eq) continue;
     *eq = 0;
     char *key = tok, *val = eq + 1;
+    // A CHANGE is what earns the screen, not the arrival of another identical
+    // heartbeat - otherwise the level would sit over the artist for ever. This
+    // also catches a change you made somewhere else, in Windows' own mixer.
     if (!strcasecmp(key, "au")) {
-      audIdx = (uint8_t)atoi(val);
+      uint8_t idx = (uint8_t)atoi(val);
       char *slash = strchr(val, '/');
+      if (idx != audIdx) audTouch = millis();
+      audIdx = idx;
       audCount = slash ? (uint8_t)atoi(slash + 1) : 0;
       audSeen = millis();
     } else if (!strcasecmp(key, "nm")) {
       strncpy(audName, val, sizeof(audName) - 1);
       audName[sizeof(audName) - 1] = 0;
     } else if (!strcasecmp(key, "vl")) {
-      audVol = (int16_t)atoi(val);
+      int16_t v = (int16_t)atoi(val);
+      if (v != audVol) audTouch = millis();
+      audVol = v;
     } else if (!strcasecmp(key, "mu")) {
-      audMute = (atoi(val) != 0);
+      bool m = (atoi(val) != 0);
+      if (m != audMute) audTouch = millis();
+      audMute = m;
       audSeen = millis();
     }
     // ---- what's playing
@@ -1643,6 +1690,32 @@ void gameParse(char *s) {
 
 static bool gameFresh() {
   return gameSeen && (millis() - gameSeen) < GAME_STALE_MS;
+}
+
+/* A page whose job is the volume. While one is up, the four B buttons and the
+   knob move the volume instead of doing whatever they normally do - and they do
+   it with HID disarmed, because none of it is HID.
+
+   Gating on the page rather than on a layer is the point: you get the volume
+   when you are looking at it, and never while you are only playing. */
+static bool audioPage() {
+  return page == P_MUSIC || (page == P_GAME && gameAudioSub());
+}
+
+/* Called every loop, before HID gets a look in. pcfPressed() reads a flag that
+   pcfEvents() recomputes once per turn, so reading it here as well takes
+   nothing away from anyone. */
+static void audioPageUpdate(int32_t det) {
+  if (!audioPage()) return;
+  if (pcfPressed(4)) audioAsk(APP_PREV);
+  if (pcfPressed(5)) audioAsk(APP_NEXT);
+  if (pcfPressed(6)) audioAsk(APP_MUTE);
+  if (pcfPressed(7)) audioAsk(APP_HOME);
+  if (det) {
+    int32_t mag = (det > 0) ? det : -det;
+    if (mag > 4) mag = 4;              // a hard spin shouldn't flood the app
+    for (int32_t i = 0; i < mag; i++) audioAsk(det > 0 ? APP_UP : APP_DN);
+  }
 }
 
 /* --------------------------------------------------------------------------
@@ -1970,12 +2043,54 @@ static void drawDisc(int16_t cx, int16_t cy, int16_t r) {
   }
 }
 
+// The target and its level, on one line. withIndex adds "5/6", which only
+// fits where the line has the full width to itself.
+static void drawAudioLine(int16_t x, int16_t y, bool withIndex) {
+  oled->setTextWrap(false);
+  oled->setCursor(x, y);
+  if (!audFresh()) {
+    oled->print(F("PC app not running"));
+  } else {
+    oled->print(audName[0] ? audName : "?");
+    if (withIndex && audCount) {
+      oled->print(' ');
+      oled->print(audIdx);
+      oled->print('/');
+      oled->print(audCount);
+    }
+    oled->print(' ');
+    if (audMute)          oled->print(F(" MUTE"));
+    else if (audVol >= 0) { oled->print(' '); oled->print(audVol); oled->print('%'); }
+  }
+  oled->setTextWrap(true);
+}
+
+// The volume on its own page: name, place in the list, and a bar you can read
+// from across the room.
+void drawAudioPicker() {
+  oled->setTextSize(1);
+  drawAudioLine(0, gTop + 1, true);
+  if (!audFresh()) {
+    oled->setCursor(0, gTop + 12);
+    oled->print(F("start it to choose"));
+    return;
+  }
+  if (audMute || audVol < 0) return;
+  const int16_t y = gTop + 12, h = 8;
+  ditherRect(0, y, SCREEN_W, h, 5);
+  int16_t fw = (int16_t)((int32_t)SCREEN_W * audVol / 100);
+  if (fw > 0) oled->fillRect(0, y, fw, h, SSD1306_WHITE);
+}
+
 void drawMusic() {
   oled->setTextSize(1);
 
   if (!npFresh() || !npTitle[0]) {
     oled->setCursor(0, gTop + 2);
     oled->print(npFresh() ? F("nothing playing") : F("PC app not running"));
+    // Nothing playing is no reason to hide the volume: this page is where you
+    // come to change it, and the knob works here whether or not there's music.
+    drawAudioLine(0, gTop + 13, true);
     return;
   }
 
@@ -1983,10 +2098,17 @@ void drawMusic() {
     // A video: title across the whole width, then the time, then the bar.
     drawScroll(npTitle, 0, gTop + 1, SCREEN_W, 0);
 
-    oled->setCursor(0, gTop + 11);
-    printMmSs(npNowMs() / 1000);
-    if (npDur > 0) { oled->print(F(" / ")); printMmSs(npDur); }
-    if (!npPlaying) oled->print(F("  ||"));
+    // Touch the volume and it takes this line for a couple of seconds. The
+    // time comes back on its own: a volume you changed is what you want to see
+    // right then, and not a moment longer.
+    if (audShowing()) {
+      drawAudioLine(0, gTop + 11, true);
+    } else {
+      oled->setCursor(0, gTop + 11);
+      printMmSs(npNowMs() / 1000);
+      if (npDur > 0) { oled->print(F(" / ")); printMmSs(npDur); }
+      if (!npPlaying) oled->print(F("  ||"));
+    }
 
     drawNpBar(0, gTop + 19, SCREEN_W);
     return;
@@ -1998,7 +2120,8 @@ void drawMusic() {
   const int16_t tw = SCREEN_W - tx;
 
   drawScroll(npTitle, tx, gTop + 1, tw, 0);
-  if (npArtist[0]) drawScroll(npArtist, tx, gTop + 11, tw, 1);
+  if (audShowing())        drawAudioLine(tx, gTop + 11, false);
+  else if (npArtist[0])    drawScroll(npArtist, tx, gTop + 11, tw, 1);
 
   // Both lines slide off to the left, over where the disc goes. Paint the
   // column out and put the disc on top - cheaper than clipping by hand, and
@@ -2524,6 +2647,7 @@ void drawGame() {
   oled->setTextColor(SSD1306_WHITE);
 
   if (gameSub >= gameSubCount()) gameSub = 0;
+  if (gameAudioSub()) { drawAudioPicker(); return; }
   switch (gameKind) {
     case 'a': drawAirPage();    break;
     case 'w': drawWtAirPage();  break;
@@ -2682,6 +2806,13 @@ void render() {
   // time-based on purpose: the travel is then the same handful of frames
   // whatever the refresh rate, and it never jumps two pixels because a frame
   // ran late. The content below does not move.
+  // Arriving on an audio page counts as touching it: you want to see WHICH app
+  // the knob is on before you turn it, not after.
+  static bool audioPageWas = false;
+  bool audioPageNow = audioPage();
+  if (audioPageNow && !audioPageWas) audTouch = millis();
+  audioPageWas = audioPageNow;
+
   static uint8_t hdrShift = 0;                 // 0 = fully shown, 9 = gone
   uint8_t target = ((millis() - tLastAct) < OLED_RETRACT_MS) ? 0 : 9;
   if      (hdrShift < target) hdrShift++;
@@ -3170,6 +3301,8 @@ void printHelp() {
   Serial.println(F("  MUSIC page"));
   Serial.println(F("    %np=1;st=1;sk=s|y;ps=<sec>;du=<sec>;ti=<title>;ar=<artist>"));
   Serial.println(F("    sk=s draws the disc and the artist, sk=y the time instead"));
+  Serial.println(F("    on the MUSIC page - and on the last GAME sub-page - the"));
+  Serial.println(F("    B buttons and the knob move the volume WITHOUT HID armed"));
   Serial.println(F("  GAME TELEMETRY"));
   Serial.println(F("    a line starting with '$', key=value fields split by ';'"));
   Serial.println(F("    $src=ETS2;spd=88;rpm=1450;rpmmax=2500;rl=2250;gear=6;fuel=62"));
@@ -3547,6 +3680,9 @@ void loop() {
   // Pages change with the onboard USER button, so no panel input is stolen by
   // the menu: every one of them stays with the PC.
   usrUpdate();
+  // Before HID: on an audio page these inputs are the volume's, and hidUpdate()
+  // is told to leave them alone.
+  audioPageUpdate(det);
   activityWatch();
 #if !RENDER_ON_CORE1
   oledSleepService();              // on core1 when rendering lives there

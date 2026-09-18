@@ -39,23 +39,64 @@ commands, startup messages) lands there. What you send appears with `>>>`.
 
 ## Per-application volume
 
-The knob can turn Spotify down without touching anything else. Hold the media
-layer (double-tap USER) with HID armed, and:
+The knob can turn Spotify down without touching anything else:
 
 | Control | What it does |
 |---|---|
 | the knob | louder / quieter, **the selected app only** |
-| `^B1` / `^B2` | previous / next app |
-| `^B3` | mute that app |
-| `^B4` | back to `Windows`, the master volume |
+| `B1` / `B2` | previous / next app |
+| `B3` | mute that app |
+| `B4` | back to `Windows`, the master volume |
 
-The selected app and its level show on the panel's HID page, and in the status
-line as `AU=Spotify:68`.
+**No arming needed.** None of this is HID - the board only asks the app, over
+the serial link it already uses - so it is gated on the PAGE instead: you get it
+while you are looking at it, and never while you are only playing. Two pages
+qualify:
+
+* the **MUSIC** page, and
+* the **last sub-page of GAME**, which exists so that with HID armed in a game,
+  where USER walks the game's own sub-pages and nothing else, the volume is
+  still one button away.
+
+Anywhere else the buttons and the knob go back to being whatever they normally
+are, and the media layer's `^B1..^B4` still work as before.
+
+The selected app and its level show on both those pages and on the HID page, and
+in the status line as `AU=Spotify:68`.
+
+`Spotify 5/6` means Spotify is the fifth of six things the knob can point at.
+The list is `Windows` - the master - followed by every application that
+currently has a channel, in alphabetical order. The number is there so you know
+how far round the loop you are.
 
 **You usually don't have to select anything.** Until you press one of those
 buttons, the knob follows whatever is playing - open Spotify and the knob is on
 Spotify. The moment you do pick one, the choice is yours and is remembered
 across restarts, in `%LOCALAPPDATA%\PicoPanel\settings.json`.
+
+### Why not the app's own volume slider
+
+Because Windows will not let anyone do it, and the ways round it are worse than
+the problem.
+
+What this moves is the application's channel in Windows' mixer, which IS a
+per-application volume: measured here, setting Spotify to 45% left Windows,
+BeamNG, Discord, Steam and the browser all at 100. Nothing else moved. The only
+thing it does not do is drag the slider inside Spotify's own window.
+
+Moving that slider would mean one of:
+
+* **Keystrokes to the app.** Spotify and every browser are Chromium windows
+  (`Chrome_WidgetWin_1`), and Chromium ignores posted key messages - it wants
+  real input. Which means focusing the window first. A volume knob that pulls
+  you out of the game to press a key is not a volume knob.
+* **The Spotify Web API.** `PUT /v1/me/player/volume` does move the real slider,
+  on whichever device is playing. It needs an app registered with Spotify, an
+  OAuth login, and a Premium account. Worth doing if you want it - it is just a
+  bigger thing than a mixer call.
+
+For YouTube there is no equivalent at all: the player takes arrow keys, and only
+when the tab has focus.
 
 ### What "YouTube" means here
 
