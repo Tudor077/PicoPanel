@@ -132,6 +132,14 @@ class Mixer:
         self._when = 0.0
         self._com_ready = set()
         self.error = "" if HAVE_AUDIO else "pycaw is missing"
+        # The app's OWN slider comes first wherever there is one - that is the
+        # one you can see moving. The mixer channel is the fallback for
+        # everything that doesn't publish one.
+        try:
+            import appvolume
+            self.inapp = appvolume.InAppVolume()
+        except Exception:
+            self.inapp = None
 
     # -- COM housekeeping -------------------------------------------------
     def _com(self):
@@ -205,6 +213,16 @@ class Mixer:
     def count(self):
         return len(self.refresh())
 
+    def source(self, index):
+        """"app" if the app's own slider is what moves, "mix" if the channel."""
+        t = self.find(index)
+        if t is None or not t.procname or self.inapp is None:
+            return "mix"
+        try:
+            return "app" if self.inapp.available(t.procname) else "mix"
+        except Exception:
+            return "mix"
+
     # -- reading and writing ---------------------------------------------
     def _endpoint(self):
         """The master volume of the default output.
@@ -232,12 +250,19 @@ class Mixer:
                 ep = self._endpoint()
                 return (int(round(ep.GetMasterVolumeLevelScalar() * 100)),
                         bool(ep.GetMute()))
+            # The app's own slider first. Mute has no equivalent there, so it
+            # always comes from the channel - and muting the channel is better
+            # anyway: it is instant and it doesn't throw away the app's level.
+            own = self.inapp.get(t.procname) if self.inapp else None
             # An app can hold several channels (browsers always do). They are
             # kept in step by every write here, so the first one speaks for all.
             for name, vol in self._sessions():
                 if name == t.procname:
-                    return (int(round(vol.GetMasterVolume() * 100)),
+                    return (own if own is not None
+                            else int(round(vol.GetMasterVolume() * 100)),
                             bool(vol.GetMute()))
+            if own is not None:
+                return own, False
         except Exception as e:
             self.error = "%s: %s" % (type(e).__name__, e)
         return None, False
@@ -253,6 +278,10 @@ class Mixer:
             if t.procname is None:
                 self._endpoint().SetMasterVolumeLevelScalar(v, None)
                 return pct
+            if self.inapp is not None:
+                got = self.inapp.set(t.procname, pct)
+                if got is not None:
+                    return got
             touched = False
             for name, vol in self._sessions():
                 if name == t.procname:
@@ -264,7 +293,18 @@ class Mixer:
             return None
 
     def nudge(self, index, steps, step_pct=4):
-        """Move by `steps` detents. Returns the new level, or None."""
+        """Move by `steps` detents. Returns the new level, or None.
+
+        An app's own slider has its own grid - Spotify snaps to ten steps of
+        10% - so that case is handed to appvolume, which moves by whole steps
+        and tracks what it asked for rather than reading back a value the app
+        updates a beat late.
+        """
+        t = self.find(index)
+        if t is not None and t.procname and self.inapp is not None:
+            got = self.inapp.nudge(t.procname, steps)
+            if got is not None:
+                return got
         cur, _muted = self.level(index)
         if cur is None:
             return None
@@ -439,11 +479,12 @@ class AudioBridge:
         i = self._index()
         label = ts[i].label if ts else "?"
         vol, muted = self.mixer.level(i)
-        return "%%au=%d/%d;nm=%s;vl=%d;mu=%d" % (
+        return "%%au=%d/%d;nm=%s;vl=%d;mu=%d;sr=%s" % (
             i + 1, len(ts),
             label.translate(_LINE_UNSAFE)[:MAX_NAME],
             -1 if vol is None else vol,
-            1 if muted else 0)
+            1 if muted else 0,
+            self.mixer.source(i))
 
     def _run(self):
         while not self._stop.is_set():

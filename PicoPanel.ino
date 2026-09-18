@@ -322,6 +322,9 @@ uint32_t npSeen       = 0;
 char     audName[14] = "";
 int16_t  audVol      = -1;      // 0..100, -1 = not known
 bool     audMute     = false;
+// 'a' = the app's own slider is what moves, 'm' = its channel in the Windows
+// mixer. Shown on screen, because the whole point was which one moves.
+char     audSrc      = 'm';
 uint8_t  audIdx      = 0;       // which target, 1-based for display
 uint8_t  audCount    = 0;
 uint32_t audSeen     = 0;
@@ -1652,6 +1655,8 @@ void audParse(char *s) {
       if (m != audMute) audTouch = millis();
       audMute = m;
       audSeen = millis();
+    } else if (!strcasecmp(key, "sr")) {
+      audSrc = (val[0] == 'a') ? 'a' : 'm';
     }
     // ---- what's playing
     else if (!strcasecmp(key, "np")) {
@@ -2061,6 +2066,10 @@ static void drawAudioLine(int16_t x, int16_t y, bool withIndex) {
     oled->print(' ');
     if (audMute)          oled->print(F(" MUTE"));
     else if (audVol >= 0) { oled->print(' '); oled->print(audVol); oled->print('%'); }
+    // Only worth saying when it is NOT the app's own slider - and never for
+    // Windows, which is the mixer by definition. Silence means "the slider you
+    // can see in the app is the one moving".
+    if (audSrc == 'm' && audIdx != 1 && !audMute) oled->print(F(" mix"));
   }
   oled->setTextWrap(true);
 }
@@ -3297,7 +3306,9 @@ void printHelp() {
   Serial.println(F("    knob      = louder / quieter, SELECTED app only"));
   Serial.println(F("    ^B1 ^B2   = previous / next app"));
   Serial.println(F("    ^B3       = mute that app   ^B4 = back to Windows"));
-  Serial.println(F("    board->PC : !AUD <code>   PC->board : %au=2/7;nm=..;vl=..;mu=0"));
+  Serial.println(F("    board->PC : !AUD <code>"));
+  Serial.println(F("    PC->board : %au=2/7;nm=..;vl=..;mu=0;sr=a|m"));
+  Serial.println(F("    sr=a the app's own slider moves, sr=m its mixer channel"));
   Serial.println(F("  MUSIC page"));
   Serial.println(F("    %np=1;st=1;sk=s|y;ps=<sec>;du=<sec>;ti=<title>;ar=<artist>"));
   Serial.println(F("    sk=s draws the disc and the artist, sk=y the time instead"));
@@ -3524,6 +3535,7 @@ void serialReport() {
     Serial.print(audName[0] ? audName : "?");
     Serial.print(':');
     if (audMute) Serial.print(F("mute")); else Serial.print(audVol);
+    Serial.print(audSrc == 'a' ? F("app") : F("mix"));
   }
 #if HID_AVAILABLE
   Serial.print(F(" HID=")); Serial.print(hidArmed ? '1' : '0');

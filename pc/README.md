@@ -74,29 +74,40 @@ buttons, the knob follows whatever is playing - open Spotify and the knob is on
 Spotify. The moment you do pick one, the choice is yours and is remembered
 across restarts, in `%LOCALAPPDATA%\PicoPanel\settings.json`.
 
-### Why not the app's own volume slider
+### The app's own slider, not the mixer channel
 
-Because Windows will not let anyone do it, and the ways round it are worse than
-the problem.
+Where an app publishes its own volume control, that is what moves - the slider
+you can see inside Spotify, not a second attenuation stacked behind it. The
+panel says `mix` after the level when it had to fall back to the mixer channel,
+and says nothing when it is the app's own.
 
-What this moves is the application's channel in Windows' mixer, which IS a
-per-application volume: measured here, setting Spotify to 45% left Windows,
-BeamNG, Discord, Steam and the browser all at 100. Nothing else moved. The only
-thing it does not do is drag the slider inside Spotify's own window.
+How: Chromium publishes an accessibility tree, and Spotify's slider is in it as
+`Change volume` with a RangeValue pattern. Setting it needs no focus change and
+no token, and takes 3-40 ms. Two other routes were considered and rejected -
+posted keystrokes, which Chromium ignores unless you focus the window, and the
+Spotify Web API, which works but wants a registered app, an OAuth login and
+Premium.
 
-Moving that slider would mean one of:
+Two things fell out of measuring it:
 
-* **Keystrokes to the app.** Spotify and every browser are Chromium windows
-  (`Chrome_WidgetWin_1`), and Chromium ignores posted key messages - it wants
-  real input. Which means focusing the window first. A volume knob that pulls
-  you out of the game to press a key is not a volume knob.
-* **The Spotify Web API.** `PUT /v1/me/player/volume` does move the real slider,
-  on whichever device is playing. It needs an app registered with Spotify, an
-  OAuth login, and a Premium account. Worth doing if you want it - it is just a
-  bigger thing than a mixer call.
+* **Spotify snaps to ten steps.** Ask for 25% and it sets 30. So a detent moves
+  by 10 there, not by 4, and the level is tracked from what we asked for rather
+  than read back - the app updates its reported value a beat late, and reading
+  between detents made a quick spin stall.
+* **Never enumerate windows through UIA.** Walking the tree for top-level
+  windows asks every application on the desktop to describe itself and waits
+  for the slow ones: 7.2 seconds, against 12 ms for the same list out of
+  `EnumWindows`. The handles come from `EnumWindows` and go into
+  `ElementFromHandle`, which talks to one process instead of all of them.
 
-For YouTube there is no equivalent at all: the player takes arrow keys, and only
-when the tab has focus.
+Anything that publishes no slider - Discord, a game, the Windows master - uses
+its mixer channel, which is a genuine per-application volume in its own right:
+setting Spotify to 45% that way left Windows, BeamNG, Discord and Steam all at
+100.
+
+A browser only exposes the YouTube player's slider while that tab is the active
+one, so YouTube usually lands on the mixer channel. It is tried first either
+way.
 
 ### What "YouTube" means here
 

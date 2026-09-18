@@ -1,0 +1,255 @@
+"""The application's OWN volume - the slider inside Spotify, not the mixer.
+
+Windows' mixer gives every process a channel, and that channel really is a
+per-application volume. But it is a second attenuation stacked on top: turn
+Spotify down that way and Spotify's own slider still reads full. If what you
+want is the slider in the app, you have to move the slider in the app.
+
+There are three ways to do that and only one of them is any good:
+
+  * Keystrokes. Spotify and every browser are Chromium windows, and Chromium
+    ignores posted key messages - it wants real input, which means focusing the
+    window. A volume knob that pulls you out of the game is not a volume knob.
+  * The Spotify Web API. Moves the real slider, needs a registered app, an OAuth
+    login and Premium.
+  * UI Automation. Chromium publishes its accessibility tree, and Spotify's
+    volume slider is in it as "Change volume" with a RangeValue pattern. We set
+    the value straight through that: no focus change, no token, 3-40 ms.
+
+The third is what this does. Measured on Spotify: the slider moves, focus stays
+where it was, and the app snaps the value to ten steps of 10% - which is why a
+detent here moves by ten, not by four.
+
+Anything the app does not expose - Discord, a game - has no slider to move, and
+the caller falls back to the mixer channel.
+
+One cost worth knowing: asking for the accessibility tree makes Chromium build
+and maintain one. It is not free for the app, though nothing measurable showed
+up here.
+"""
+
+import threading
+import time
+
+try:
+    import comtypes
+    import comtypes.client
+    import psutil
+    import win32gui
+    import win32process
+    HAVE_UIA = True
+except Exception:                                   # pragma: no cover
+    HAVE_UIA = False
+
+# Spotify's slider snaps to ten steps. Four percent a detent would leave the
+# knob doing nothing most of the time.
+STEP = 10
+
+# Finding the slider costs about 40 ms, so the element is kept. An app with no
+# slider at all is only re-checked this often, or every detent would pay for a
+# search that is going to fail again.
+RETRY_S = 5.0
+
+
+class InAppVolume:
+    """Per-application volume through the app's own UI.
+
+    UI Automation objects belong to the thread that made them, so everything
+    here is created lazily on whichever thread calls first and never handed
+    across. In the app that is the audio thread, and only that one.
+    """
+
+    def __init__(self):
+        self.error = "" if HAVE_UIA else "comtypes is missing"
+        self._lock = threading.RLock()
+        self._uia = None
+        self._uia_thread = None
+        self._mod = None
+        self._cache = {}        # procname -> RangeValue pattern, or None
+        self._tried = {}        # procname -> when we last looked
+        self._want = {}         # procname -> the level we last asked for
+
+    # -- setting up -------------------------------------------------------
+    def _client(self):
+        """The UIA client for this thread, or None."""
+        if not HAVE_UIA:
+            return None
+        me = threading.get_ident()
+        if self._uia is not None and self._uia_thread == me:
+            return self._uia
+        try:
+            try:
+                comtypes.CoInitialize()
+            except Exception:
+                pass
+            comtypes.client.GetModule("UIAutomationCore.dll")
+            import comtypes.gen.UIAutomationClient as mod
+            self._mod = mod
+            self._uia = comtypes.client.CreateObject(
+                mod.CUIAutomation, interface=mod.IUIAutomation)
+            self._uia_thread = me
+            # A fresh client means the cached elements came from the old one.
+            self._cache.clear()
+            return self._uia
+        except Exception as e:
+            self.error = "%s: %s" % (type(e).__name__, e)
+            return None
+
+    # -- finding the slider ----------------------------------------------
+    def _windows_of(self, procname):
+        """UIA elements for that app's visible top-level windows.
+
+        The handles come from EnumWindows, NOT from walking the UIA tree. That
+        walk asks every application on the desktop to describe itself and waits
+        for the slow ones: measured at 7.2 SECONDS here against 12 ms for the
+        same list out of EnumWindows. ElementFromHandle then costs nothing,
+        because it talks to one process instead of all of them.
+        """
+        uia = self._uia
+        hwnds = []
+
+        def cb(hwnd, _):
+            if not win32gui.IsWindowVisible(hwnd) or not win32gui.GetWindowText(hwnd):
+                return
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                if psutil.Process(pid).name().lower() == procname:
+                    hwnds.append(hwnd)
+            except Exception:
+                pass
+
+        try:
+            win32gui.EnumWindows(cb, None)
+        except Exception:
+            return []
+
+        out = []
+        for hwnd in hwnds:
+            try:
+                el = uia.ElementFromHandle(hwnd)
+                if el:
+                    out.append(el)
+            except Exception:
+                pass
+        return out
+
+    def _find(self, procname):
+        """The RangeValue pattern of that app's volume slider, or None."""
+        uia = self._client()
+        if uia is None:
+            return None
+        mod = self._mod
+        sliders = uia.CreatePropertyCondition(mod.UIA_ControlTypePropertyId,
+                                              mod.UIA_SliderControlTypeId)
+        for win in self._windows_of(procname):
+            try:
+                found = win.FindAll(mod.TreeScope_Descendants, sliders)
+            except Exception:
+                continue
+            for i in range(found.Length):
+                el = found.GetElement(i)
+                try:
+                    name = (el.CurrentName or "").lower()
+                except Exception:
+                    continue
+                # "Change volume" in Spotify, "Volume" in a web player. Matching
+                # on the word rather than a fixed string means an app we have
+                # never seen works without being added to a list.
+                if "volume" not in name:
+                    continue
+                try:
+                    rv = el.GetCurrentPattern(mod.UIA_RangeValuePatternId)
+                    rv = rv.QueryInterface(mod.IUIAutomationRangeValuePattern)
+                    rv.CurrentValue                  # prove it answers
+                    return rv
+                except Exception:
+                    continue
+        return None
+
+    def _pattern(self, procname, force=False):
+        with self._lock:
+            procname = (procname or "").lower()
+            if not procname:
+                return None
+            if not force and procname in self._cache:
+                rv = self._cache[procname]
+                if rv is not None:
+                    return rv
+                if time.time() - self._tried.get(procname, 0) < RETRY_S:
+                    return None            # no slider, and we looked recently
+            rv = self._find(procname)
+            self._cache[procname] = rv
+            self._tried[procname] = time.time()
+            return rv
+
+    # -- the interface the mixer uses -------------------------------------
+    def available(self, procname):
+        return self._pattern(procname) is not None
+
+    def get(self, procname):
+        """0..100, or None if this app has no slider of its own."""
+        for force in (False, True):        # a stale element gets one re-find
+            rv = self._pattern(procname, force)
+            if rv is None:
+                return None
+            try:
+                return int(round(rv.CurrentValue * 100))
+            except Exception:
+                with self._lock:
+                    self._cache.pop((procname or "").lower(), None)
+        return None
+
+    def set(self, procname, pct):
+        """Set 0..100. Returns what we asked for, or None."""
+        pct = max(0, min(100, int(pct)))
+        for force in (False, True):
+            rv = self._pattern(procname, force)
+            if rv is None:
+                return None
+            try:
+                rv.SetValue(pct / 100.0)
+                with self._lock:
+                    self._want[(procname or "").lower()] = pct
+                return pct
+            except Exception:
+                with self._lock:
+                    self._cache.pop((procname or "").lower(), None)
+        return None
+
+    def nudge(self, procname, steps):
+        """Move by whole slider steps. Returns the new level, or None.
+
+        Driven from what we last ASKED for, not from what the app reports. Two
+        reasons: the app snaps to its own grid, and it updates the reported
+        value a beat late - so reading back between detents would make a quick
+        spin crawl or stall. If the app's value has drifted more than one step
+        from our intention, somebody moved the slider by hand and we start from
+        theirs instead.
+        """
+        key = (procname or "").lower()
+        cur = self.get(procname)
+        if cur is None:
+            return None
+        with self._lock:
+            want = self._want.get(key)
+        if want is None or abs(cur - want) > STEP:
+            want = cur
+        return self.set(procname, want + steps * STEP)
+
+
+if __name__ == "__main__":
+    import sys
+    v = InAppVolume()
+    who = sys.argv[1] if len(sys.argv) > 1 else "spotify.exe"
+    t0 = time.perf_counter()
+    lvl = v.get(who)
+    print("%s: %s  (first lookup %.0f ms)"
+          % (who, "no slider of its own" if lvl is None else "%d%%" % lvl,
+             (time.perf_counter() - t0) * 1000))
+    if lvl is not None:
+        t0 = time.perf_counter()
+        for _ in range(3):
+            v.get(who)
+        print("cached reads: %.1f ms each" % ((time.perf_counter() - t0) * 1000 / 3))
+    if v.error:
+        print("error:", v.error)
