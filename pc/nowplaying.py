@@ -14,7 +14,6 @@ runs the clock forward itself between updates.
 """
 
 import asyncio
-import re
 import threading
 import time
 
@@ -31,10 +30,9 @@ try:
 except Exception:                                   # pragma: no cover
     BROWSERS, _browser_titles = {}, lambda: {}
 
-# The panel draws the GFX ASCII font: anything above 0x7E comes out as a box.
-# ';' and '=' are the protocol's separators. Titles are full of both problems -
-# smart quotes, em dashes, CJK - so they're cleaned here, not on the board.
-_UNSAFE = re.compile(r"[^A-Za-z0-9 .,_/+()\[\]:!?&'-]")
+# Transliteration and the wire-safe character set both live in one place: the
+# same rules apply to a track title and to a city name in a truck sim.
+from telemetry.text import clean as _clean
 
 MAX_TITLE = 40
 MAX_ARTIST = 22
@@ -46,10 +44,6 @@ PLAYING = 4          # GlobalSystemMediaTransportControlsSessionPlaybackStatus
 _BROWSER_HINTS = tuple(sorted(
     {b[:-4] for b in BROWSERS} | {"opera", "chrome", "msedge", "edge",
                                   "firefox", "brave", "vivaldi"}))
-
-
-def _clean(s, limit):
-    return _UNSAFE.sub("", str(s or "")).strip()[:limit]
 
 
 def _secs(v):
@@ -126,9 +120,17 @@ class NowPlaying:
         except Exception:
             return None
 
-        title = _clean(props.title, MAX_TITLE)
+        raw = str(props.title or "")
+        title = _clean(raw, MAX_TITLE)
+        artist = _clean(props.artist, MAX_ARTIST)
         if not title:
-            return None
+            if not raw.strip():
+                return None              # genuinely nothing playing
+            # Something IS playing, we just can't write its name in this font -
+            # Japanese, Chinese, emoji. A page with a placeholder still gives
+            # you the disc, the time and the bar; claiming silence gives you
+            # nothing and is a lie besides.
+            title, artist = (artist, "") if artist else ("(untitled)", "")
 
         pos = _secs(tl.position)
         dur = _secs(tl.end_time)
@@ -161,7 +163,7 @@ class NowPlaying:
 
         return {
             "title": title,
-            "artist": _clean(props.artist, MAX_ARTIST),
+            "artist": artist,
             "playing": info.playback_status == PLAYING,
             "pos": pos + age,
             "dur": dur,

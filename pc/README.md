@@ -161,6 +161,30 @@ frames a second off two updates a second.
 Needs `winrt-Windows.Media.Control`. Without it the page says the app isn't
 running; everything else carries on.
 
+### Titles that aren't in English
+
+The panel draws the GFX built-in font, which is ASCII. Anything else used to be
+deleted character by character - fine for a stray typographic dash, a disaster
+for a title written entirely in Cyrillic: it came out empty, and an empty title
+was taken for silence. The page said "nothing playing" over a track that was
+playing.
+
+Now letters that have a Latin form get one, in `telemetry/text.py`:
+
+| | |
+|---|---|
+| `Пыяла` | `Pyyala` |
+| `Король и Шут` | `Korol i Shut` |
+| `Незалежність` | `Nezalezhnist` |
+| `Café del Mar` | `Cafe del Mar` |
+
+Japanese, Chinese and emoji have no Latin form, so they still come out empty -
+but empty no longer means silence. The page falls back to the artist's name, or
+to `(untitled)`, and the disc, the time and the bar carry on working.
+
+The same rules run over game telemetry, where they were quietly eating city
+names: ETS2's `Kraków` used to reach the panel as `Krakw`.
+
 ## Sharing OutGauge with CorsaConnect
 
 OutGauge has exactly one listener, and

@@ -82,6 +82,12 @@ def main():
         "--hidden-import", "winrt.windows.media.control",
         "--hidden-import", "winrt.windows.foundation",
         "--hidden-import", "winrt.system",
+        "--hidden-import", "telemetry.text",
+        # UI Automation, for an app's own volume slider. comtypes builds the
+        # wrapper at run time into a writable cache, which works frozen too -
+        # verified - but the import itself is still invisible to the analyser.
+        "--hidden-import", "appvolume",
+        "--hidden-import", "comtypes.client",
         os.path.join(HERE, "panel.py"),
     ]
     print(" ".join(cmd), "\n")

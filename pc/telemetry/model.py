@@ -5,14 +5,14 @@ into the structure here, and the structure knows how to write itself as the line
 the firmware expects.
 """
 
-import re
 import time
 from dataclasses import dataclass, field
 
-# The screen uses the GFX library's ASCII font: accented letters and anything
-# above 0x7E come out as boxes. ';' and '=' are the protocol's separators, so
-# they go too. We strip it all here, not on the board.
-_UNSAFE = re.compile(r"[^A-Za-z0-9 .,_/+()\[\]:-]")
+# The screen uses the GFX library's ASCII font. Letters that have a Latin form
+# get one - Krakow rather than Krakw - and the rest goes. See text.py; the same
+# code does the track titles, where deleting instead of transliterating left a
+# Russian title empty and the page claimed nothing was playing.
+from .text import clean as _text_clean
 
 MAX_LINE = 200          # the firmware's buffer is 224; leave room.
                         # A full aircraft line goes past 170.
@@ -21,7 +21,7 @@ MAX_SRC = 11            # gameSrc[12]
 
 
 def _clean(s, limit):
-    return _UNSAFE.sub("", str(s))[:limit].strip()
+    return _text_clean(s, limit)
 
 
 @dataclass
