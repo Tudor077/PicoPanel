@@ -255,11 +255,27 @@ to `(untitled)`, and the disc, the time and the bar carry on working.
 The same rules run over game telemetry, where they were quietly eating city
 names: ETS2's `Kraków` used to reach the panel as `Krakw`.
 
-## The KARAOKE page
+## Karaoke: MUSIC's second sub-page
 
-The line being sung, and the one after it drawn faint. Both are rendered here
-with a real font and sent as pixels, like the titles, so a Russian song is a
-Russian song.
+Not a page of its own. It started as one and that was one more thing to walk
+past on the way round - the words and the track are the same subject. USER
+alternates the two while you are on MUSIC, armed or not, and the header counts
+them: `MUSIC 2/2`.
+
+The line being sung is **inverted** - a white band with the words cut out of it
+- and the one coming is plain below it. The first attempt drew the next line at
+half density on the Bayer grid, and it was unreadable for a reason worth
+remembering: the progress bar's background uses that same grid, so the faint
+text and the faint bar merged into one field of dots. At seven pixels tall there
+is no room to throw half of them away anyway.
+
+Both lines are rendered here with a real font and sent as pixels, like the
+titles, so a Russian song is a Russian song.
+
+**The screen stays on** while the words are up and something is playing. Every
+other page sleeps after twenty idle seconds, which is right for a page that
+never changes on its own; this one changes by itself, and a karaoke display that
+goes dark mid-verse is no use.
 
 **The board decides when the line turns over.** It is handed both lines with the
 millisecond each begins, and compares that against the clock it already runs for

@@ -322,8 +322,9 @@ bool        padUsed    = false;   // is there at least one PAD() in the tables?
 // The title rarely fits. Each line that might slide keeps its own place in the
 // slide, so the title and the artist don't march in lockstep.
 struct Marquee { uint16_t hash; uint32_t t0; };
-// 0 title text, 1 artist text, 2 title strip, 3 artist strip, 4 the sung line.
-static Marquee marq[5];
+// 0 title text, 1 artist text, 2 title strip, 3 artist strip, 4 the sung line,
+// 5 the one after it.
+static Marquee marq[6];
 
 /* The karaoke lines, also pixels drawn on the PC.
 
@@ -543,12 +544,18 @@ volatile uint32_t encChgB = 0;
 volatile uint8_t  encTrig = '?';
 
 // ------------------------------------------------------------------ state --
-enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC, P_KARAOKE, P_HID, P_SW, P_ENC, P_BTN,
-            P_PCF, P_I2C, P_INFO, P_COUNT };
+enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC, P_HID, P_SW, P_ENC, P_BTN, P_PCF,
+            P_I2C, P_INFO, P_COUNT };
+
+// MUSIC has two faces: what's playing, and the words. A page of its own was
+// tried and it is one more thing to walk past - they are the same subject, and
+// GAME already shows that a page can have sub-pages without being game mode.
+uint8_t  musicSub = 0;      // 0 = now playing, 1 = karaoke
+#define MUSIC_SUBS 2
 
 const char *PAGE_NAME[P_COUNT] =
-  { "PANEL", "GAME", "MUSIC", "KARAOKE", "HID", "SWITCHES", "ENCODER", "BUTTONS",
-    "PCF8574", "I2C", "INFO" };
+  { "PANEL", "GAME", "MUSIC", "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574",
+    "I2C", "INFO" };
 
 uint8_t  page       = P_OVERVIEW;
 int32_t  encValue   = 50;
@@ -1908,6 +1915,14 @@ void oledSleepService() {
   }
 #endif
 
+  // The words, while something is actually playing. A karaoke page that goes
+  // dark twenty seconds in is no use to anybody - and unlike the other pages
+  // this one changes by itself, so there is something to look at.
+  if (page == P_MUSIC && musicSub == 1 && npFresh() && npPlaying) {
+    if (oledSleep != 0) oledWakeReq = true;
+    return;
+  }
+
   uint32_t idle = millis() - tLastAct;
   if (oledSleep == 0 && idle >= OLED_DIM_MS) {
     oled->ssd1306_command(SSD1306_SETCONTRAST);
@@ -2071,6 +2086,13 @@ void usrUpdate() {
   }
   gameSub = 0;
 #endif
+  // MUSIC walks its own two the same way, armed or not - the words are not a
+  // gaming feature and shouldn't need HID to reach.
+  if (page == P_MUSIC && musicSub + 1 < MUSIC_SUBS) {
+    musicSub++;
+    return;
+  }
+  musicSub = 0;
   page = (uint8_t)((page + 1) % P_COUNT);
 }
 
@@ -2138,7 +2160,13 @@ static const uint8_t BAYER4[16] = {
 */
 static void drawStrip(const uint8_t *bmp, uint16_t w,
                       int16_t x, int16_t y, int16_t win, uint8_t slot,
-                      bool dim = false) {
+                      bool invert = false) {
+  // Inverted: a white band with the words cut out of it. This replaced drawing
+  // the line at half density on the Bayer grid, which was unreadable for a
+  // reason worth remembering - the progress bar's background uses that SAME
+  // grid, so the faint text and the faint bar merged into one field of dots.
+  // At seven pixels tall there is no room to throw half of them away anyway.
+  if (invert) oled->fillRect(x, y, win, 8, SSD1306_WHITE);
   if (!w) return;
   const int16_t GAP = 18;
   const uint32_t LEAD = 1200, PXMS = 28;
@@ -2162,11 +2190,7 @@ static void drawStrip(const uint8_t *bmp, uint16_t w,
     if (!col) continue;
     for (uint8_t r = 0; r < 8; r++) {
       if (!(col & (1 << r))) continue;
-      // "dim" keeps a bit under half the pixels, on the same Bayer grid the
-      // bars use. On one bit per pixel that is the only grey there is, and it
-      // is enough to read the next line as coming rather than current.
-      if (dim && BAYER4[((r & 3) << 2) | ((x + sx) & 3)] >= 7) continue;
-      oled->drawPixel(x + sx, y + r, SSD1306_WHITE);
+      oled->drawPixel(x + sx, y + r, invert ? SSD1306_BLACK : SSD1306_WHITE);
     }
   }
 }
@@ -2288,16 +2312,18 @@ void drawKaraoke() {
   const uint8_t *cur = turned ? lyrNextBmp : lyrCurBmp;
   uint16_t       curW = turned ? lyrNextW  : lyrCurW;
 
+  // The line being sung is inverted, the one coming is plain. Which is which
+  // has to be readable at a glance, and on this screen a white band is the only
+  // emphasis there is.
   if (curW) {
-    drawStrip(cur, curW, 0, gTop + 1, SCREEN_W, 4);
+    drawStrip(cur, curW, 0, gTop + 1, SCREEN_W, 4, true);
   } else {
-    oled->setCursor(0, gTop + 1);
-    oled->print(F("..."));            // the gap between verses, not a fault
+    oled->fillRect(0, gTop + 1, SCREEN_W, 8, SSD1306_WHITE);   // the gap
   }
   // Only while we are still on the line we were given: once it has turned over
   // the "next" line IS the current one, and there is nothing after it yet.
   if (!turned && lyrNextW)
-    drawStrip(lyrNextBmp, lyrNextW, 0, gTop + 11, SCREEN_W, 4, true);
+    drawStrip(lyrNextBmp, lyrNextW, 0, gTop + 11, SCREEN_W, 5);
 
   drawNpBar(0, gTop + 19, SCREEN_W);
 }
@@ -2434,6 +2460,9 @@ void header(int shift) {
   if (page == P_GAME && gameFresh()) {
     cur = (unsigned)(gameSub + 1);
     tot = (unsigned)gameSubCount();
+  } else if (page == P_MUSIC) {
+    cur = (unsigned)(musicSub + 1);
+    tot = (unsigned)MUSIC_SUBS;
   }
   char buf[16];
   snprintf(buf, sizeof(buf), "%s%s%u/%u", hidMark, mediaLayer ? "M " : "",
@@ -3051,8 +3080,9 @@ void render() {
     case P_I2C:      drawI2C();      break;
     case P_INFO:     drawInfo();     break;
     case P_HID:      drawHid();      break;
-    case P_MUSIC:    drawMusic();    break;
-    case P_KARAOKE:  drawKaraoke();  break;
+    case P_MUSIC:
+      if (musicSub == 1) drawKaraoke(); else drawMusic();
+      break;
     case P_GAME:     drawGame();     break;
   }
   oled->display();
@@ -3531,6 +3561,7 @@ void printHelp() {
   Serial.println(F("    byte per column - how Cyrillic gets on a 5x7 ASCII panel"));
   Serial.println(F("    %ky=1|2;at=<ms>;w=<px>;d=<base64>  a sung line and the next,"));
   Serial.println(F("    each with the millisecond it starts - the board switches them"));
+  Serial.println(F("    the words are MUSIC's second sub-page: USER walks the two"));
   Serial.println(F("    on the MUSIC page - and on the last GAME sub-page - the"));
   Serial.println(F("    B buttons and the knob move the volume WITHOUT HID armed"));
   Serial.println(F("  GAME TELEMETRY"));
