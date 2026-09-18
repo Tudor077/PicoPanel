@@ -25,21 +25,9 @@ OUT = os.path.join(ROOT, NAME + ".exe")
 
 
 def make_icon(path):
-    """The same icon as in the tray, drawn larger so it also looks right in
-    Explorer, where Windows asks for it at 256 px."""
-    from PIL import Image, ImageDraw
-
-    img = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle([16, 48, 240, 208], radius=24,
-                        fill=(32, 34, 40), outline=(120, 130, 145), width=6)
-    d.rectangle([48, 80, 208, 144], fill=(64, 196, 122))
-    d.ellipse([48, 160, 80, 192], fill=(150, 160, 175))
-    d.ellipse([104, 160, 136, 192], fill=(150, 160, 175))
-    d.ellipse([160, 160, 192, 192], fill=(230, 120, 90))
-    img.save(path, format="ICO",
-             sizes=[(256, 256), (64, 64), (48, 48), (32, 32), (16, 16)])
-    return path
+    """The same drawing the tray uses - see icon.py."""
+    import icon
+    return icon.save_ico(path)
 
 
 def main():
@@ -86,6 +74,7 @@ def main():
         # Titles are drawn here with a real font and sent as pixels, which is
         # how Cyrillic reaches a panel whose own font is ASCII.
         "--hidden-import", "textstrip",
+        "--hidden-import", "icon",
         # Synced lyrics for the karaoke page.
         "--hidden-import", "lyrics",
         "--hidden-import", "PIL.ImageFont",

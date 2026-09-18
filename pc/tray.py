@@ -16,7 +16,7 @@ import threading
 import win32api
 import win32con
 import win32gui
-from PIL import Image, ImageDraw
+import icon
 
 WM_TRAY = win32con.WM_USER + 20
 
@@ -27,16 +27,14 @@ MENU_RELEASE = 1004
 
 
 def _make_icon():
-    """The icon, drawn on the spot: a panel with a lit screen."""
-    img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle([2, 6, 29, 26], radius=3, fill=(32, 34, 40), outline=(120, 130, 145))
-    d.rectangle([6, 10, 25, 18], fill=(64, 196, 122))
-    d.ellipse([6, 20, 10, 24], fill=(150, 160, 175))
-    d.ellipse([13, 20, 17, 24], fill=(150, 160, 175))
-    d.ellipse([20, 20, 24, 24], fill=(230, 120, 90))
+    """The icon, from the one drawing the executable also uses.
+
+    Drawn at 256 and reduced, not drawn at 32: a shape composed at 32 px falls
+    apart when Windows asks for 16, while a reduction of a well-composed big one
+    keeps the weight of each element.
+    """
     path = os.path.join(tempfile.gettempdir(), "picopanel_tray.ico")
-    img.save(path, format="ICO", sizes=[(32, 32), (16, 16)])
+    icon.save_ico(path, sizes=(32, 16))
     return path
 
 
