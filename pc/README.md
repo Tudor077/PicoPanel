@@ -325,6 +325,29 @@ key.
 
 Until you tick it, nothing leaves the machine and the page says so.
 
+## Looking after the screen
+
+An OLED wears out the pixels that are lit, and this panel draws the same header
+in the same place for hours. Three things guard against it.
+
+**The picture moves.** Every two minutes the whole frame shifts by a pixel,
+round a three-by-three grid, the way a television shifts its logo. It is done to
+the finished frame rather than to the drawing code - every page would otherwise
+have to know about it, and one that forgot would sit still while the rest moved.
+The pixel that falls off an edge is always the end of the header bar or blank
+space, never anything you read.
+
+**It sleeps unless you are looking.** Telemetry arriving used to hold the panel
+lit whatever page was showing, so a game running in the background kept the
+button test on screen for hours. Now that only applies while the GAME page is
+actually up. The karaoke page is the other exception, and for the opposite
+reason: it changes by itself, so there is something to watch.
+
+**The boot screen fades out.** The name types itself a letter at a time, the
+board underneath arrives in one piece, and the whole thing dissolves left to
+right - a band of dither sweeping across, since on one bit per pixel that is the
+only fade there is.
+
 ## Sharing OutGauge with CorsaConnect
 
 OutGauge has exactly one listener, and

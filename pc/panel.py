@@ -18,6 +18,7 @@ import base64
 import os
 import queue
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -285,6 +286,17 @@ class App(tk.Tk):
     def __init__(self, hidden=False):
         super().__init__()
         self.title("PicoPanel")
+        # The taskbar shows the WINDOW's icon, not the executable's - which is
+        # why a perfectly good icon in the .exe still left Tk's default feather
+        # sitting down there. Same drawing as the tray and the exe, written out
+        # because Tk wants a file on disk.
+        try:
+            import icon as _icon
+            _ico = os.path.join(tempfile.gettempdir(), "picopanel_win.ico")
+            _icon.save_ico(_ico)
+            self.iconbitmap(default=_ico)       # default: every window we open
+        except Exception:
+            pass                                # an icon is never worth a crash
         self.geometry("880x660")
         self.minsize(760, 560)
 

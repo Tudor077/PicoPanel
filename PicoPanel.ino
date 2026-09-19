@@ -1893,6 +1893,59 @@ uint8_t  oledSleep = 0;        // 0 = awake, 1 = dimmed, 2 = off
 // It stays a named origin rather than a scattered literal 11 so the layouts
 // read as "first row, second row" instead of magic numbers.
 const uint8_t gTop = 10;
+
+/* ---- anti burn-in --------------------------------------------------------
+   An OLED wears out the pixels that are lit, and this panel draws the same
+   header in the same place for hours at a time. So every few minutes the whole
+   picture moves by a pixel, the way a television shifts its logo.
+
+   Done to the finished frame rather than to the drawing code: every page would
+   otherwise have to know about it, and one that forgot would sit still while
+   the rest moved. A pixel of the picture falls off one edge - it is always an
+   edge of the header bar or blank space, never anything you read. */
+#define BURN_STEP_MS 120000UL     // two minutes on each of the nine positions
+int8_t   burnX = 0, burnY = 0;
+
+static void burnService() {
+  static uint32_t tNext = 0;
+  static uint8_t  step = 0;
+  uint32_t now = millis();
+  if (now < tNext) return;
+  tNext = now + BURN_STEP_MS;
+  step = (uint8_t)((step + 1) % 9);
+  burnX = (int8_t)(step % 3) - 1;         // -1, 0, +1
+  burnY = (int8_t)(step / 3) - 1;
+}
+
+// Move the finished frame by (dx, dy). One pixel each way, which is all the
+// shifting is ever asked for, so the bit work stays simple.
+static void frameShift(int8_t dx, int8_t dy) {
+  if (!dx && !dy) return;
+  uint8_t *buf = oled->getBuffer();
+  const int16_t W = SCREEN_W;
+  const int16_t pages = oledH / 8;
+
+  if (dx) {
+    for (int16_t p = 0; p < pages; p++) {
+      uint8_t *row = buf + p * W;
+      if (dx > 0) { memmove(row + 1, row, W - 1); row[0] = 0; }
+      else        { memmove(row, row + 1, W - 1); row[W - 1] = 0; }
+    }
+  }
+  if (dy > 0) {                            // down: bits climb into the next page
+    for (int16_t p = pages - 1; p >= 0; p--)
+      for (int16_t x = 0; x < W; x++) {
+        uint8_t up = (p > 0) ? buf[(p - 1) * W + x] : 0;
+        buf[p * W + x] = (uint8_t)((buf[p * W + x] << 1) | (up >> 7));
+      }
+  } else if (dy < 0) {
+    for (int16_t p = 0; p < pages; p++)
+      for (int16_t x = 0; x < W; x++) {
+        uint8_t dn = (p + 1 < pages) ? buf[(p + 1) * W + x] : 0;
+        buf[p * W + x] = (uint8_t)((buf[p * W + x] >> 1) | (dn << 7));
+      }
+  }
+}
 uint32_t tLastAct  = 0;
 
 // Called from core0 (a button, activity, serial). It does NOT touch the bus: it
@@ -1928,7 +1981,10 @@ void oledSleepService() {
   // zero while telemetry is fresh, and wake it if it had managed to fall asleep.
   // When the game stops, telemetry goes stale after GAME_STALE_MS and the usual
   // countdown starts from there.
-  if (gameFresh()) {
+  // AND you have to be looking at it. Holding the panel lit for hours because
+  // a game happens to be running, while the screen shows the button test, is
+  // just burning the same pixels for nothing.
+  if (gameFresh() && page == P_GAME) {
     // Keep the panel lit, but do NOT touch tLastAct. That clock measures YOUR
     // activity, and the header retract reads the same clock - telemetry
     // resetting it sixty times a second would pin the header open for the
@@ -3138,6 +3194,8 @@ void render() {
       break;
     case P_GAME:     drawGame();     break;
   }
+  burnService();
+  frameShift(burnX, burnY);          // after everything, before it is sent
   oled->display();
   mirrorCapture();                   // hand core0 a frame that's actually done
   renderUs = micros() - t0;
@@ -3879,6 +3937,55 @@ void serialReport() {
    button latency.
    ========================================================================== */
 #define RENDER_ON_CORE1 1
+/* The boot screen.
+
+   The name types itself out a letter at a time, the board underneath arrives in
+   one piece, and then the whole thing dissolves left to right. The dissolve is
+   a band of dither sweeping across: a column just behind the wave loses some of
+   its pixels, one well behind has lost them all. On a screen with one bit per
+   pixel that is the only fade there is. */
+static void splash() {
+  const char *name = "PANEL";
+
+  for (uint8_t n = 1; n <= 5; n++) {
+    oled->clearDisplay();
+    oled->setTextColor(SSD1306_WHITE);
+    oled->setTextSize(2);
+    oled->setCursor(4, 2);
+    for (uint8_t i = 0; i < n; i++) oled->write(name[i]);
+    oled->display();
+    mirrorCapture();
+    delay(90);
+  }
+
+  // The board's name is not being typed - it is what the thing IS, and it
+  // should be there the moment the name finishes.
+  oled->setTextSize(1);
+  oled->setCursor(4, 22);
+  oled->print(F("YD-RP2040  0x"));
+  oled->print(oledAddr, HEX);
+  oled->display();
+  mirrorCapture();
+  delay(650);
+
+  const int16_t TAIL = 28;            // how wide the dissolving band is
+  for (int16_t t = 0; t < SCREEN_W + TAIL; t += 6) {
+    for (int16_t x = 0; x < SCREEN_W; x++) {
+      int16_t d = t - x;
+      if (d <= 0) continue;                       // the wave hasn't reached it
+      uint8_t level = (d >= TAIL) ? 16 : (uint8_t)((int32_t)d * 16 / TAIL);
+      for (int16_t y = 0; y < oledH; y++)
+        if (BAYER4[((y & 3) << 2) | (x & 3)] < level)
+          oled->drawPixel(x, y, SSD1306_BLACK);
+    }
+    oled->display();
+    mirrorCapture();
+  }
+  oled->clearDisplay();
+  oled->display();
+  mirrorCapture();
+}
+
 void setup() {
   pinMode(PIN_STATUS_LED, OUTPUT);
   digitalWrite(PIN_STATUS_LED, STATUS_LED_ENABLED ? HIGH : LOW);
@@ -3934,15 +4041,7 @@ void setup() {
   printHelp();
 
   if (oledOK) {
-    oled->clearDisplay();
-    oled->setTextColor(SSD1306_WHITE);
-    oled->setTextSize(2);
-    oled->setCursor(4, 2);  oled->print(F("PANEL"));
-    oled->setTextSize(1);
-    oled->setCursor(4, 22); oled->print(F("YD-RP2040  0x"));
-    oled->print(oledAddr, HEX);
-    oled->display();
-    delay(900);
+    splash();
   } else {
     Serial.println(F("WARNING: no OLED on 0x3C / 0x3D. Carrying on over Serial only."));
     Serial.println(F("  Suggested order: 'b' (power/wiring) -> 'k' (bus recovery)"
