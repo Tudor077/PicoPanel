@@ -60,7 +60,7 @@ class PageList(ttk.Frame):
         self._keep = []             # the shrunk ones, so Tk keeps them
         self._blank = None
         self._rows = {}
-        self._drag_from = None
+        self._drag = None           # what is in the hand, while it is
         self._build()
 
     def _build(self):
@@ -120,6 +120,8 @@ class PageList(ttk.Frame):
             child.destroy()
         self._rows = {}
         self._keep = []
+        self._faces_of = {}
+        self._tail = None
         order, rest = self.app._pg_ids
         for i, pg in enumerate(order):
             self._card(pg, i, True)
@@ -130,6 +132,7 @@ class PageList(ttk.Frame):
             tk.Label(head, text="Not shown - USER walks past these", bg=BG,
                      fg=DIM, font=("", 9)).pack(side="left", padx=8)
             self._wheel(head)
+            self._tail = head        # where the rotation ends, for the drag
         for pg in rest:
             self._card(pg, None, False)
             self._faces(pg)
@@ -144,6 +147,7 @@ class PageList(ttk.Frame):
         what is sending.
         """
         n = self.app.subs_of(pg)
+        mine = self._faces_of.setdefault(pg, [])
         for sub in range(1, n):
             shot = self.shots.get((pg, sub)) or self._blank_shot()
             small = shot.subsample(SHOT_SCALE)   # the panel's own size, 128x32
@@ -157,6 +161,7 @@ class PageList(ttk.Frame):
             tk.Label(row, text="%s - %d of %d" % (self.app.page_name(pg),
                                                   sub + 1, n),
                      bg=CARD, fg=DIM, font=("", 9)).pack(side="left", padx=6)
+            mine.append(row)         # they travel with the page when it moves
             for wdg in (row, pic):
                 wdg.bind("<Button-1>",
                          lambda _e, p=pg, s=sub: self.app.pg_show(p, s))
@@ -219,37 +224,94 @@ class PageList(ttk.Frame):
         for wdg in (card, grip, pic, side, btn):
             self._wheel(wdg)
         if inside:
-            grip.bind("<ButtonPress-1>", lambda e, i=idx: self._grab(i))
+            grip.bind("<ButtonPress-1>",
+                      lambda e, p=pg, i=idx: self._grab(e, p, i))
             grip.bind("<B1-Motion>", self._haul)
             grip.bind("<ButtonRelease-1>", self._release)
 
     # -------------------------------------------------------------- moving
-    def _grab(self, i):
-        self._drag_from = i
+    #
+    # The card is lifted OUT of the list and follows the pointer pixel by
+    # pixel, with a gap left where it will land. It used to jump straight to
+    # the new position the moment the pointer crossed a card - correct, and it
+    # felt like the list was arguing with you rather than being held.
+
+    def _grab(self, ev, pg, idx):
+        card = self._rows.get(pg)
+        if card is None or self._drag:
+            return
+        h, w = card.winfo_height(), card.winfo_width()
+        y = card.winfo_rooty() - self.list.winfo_rooty()
+        hold = ev.y_root - card.winfo_rooty()
+
+        card.pack_forget()
+        for row in self._faces_of.get(pg, []):
+            row.pack_forget()          # the faces go with their page
+        self.list.update_idletasks()
+
+        # Where the OTHER cards sit with this one out of the flow. Measured
+        # once, and the gap is never counted: the drop position is then a
+        # fixed function of where the pointer is, and cannot oscillate between
+        # two answers as the layout moves under it.
+        order = self.app._pg_ids[0]
+        rest = [p for p in order if p != pg]
+        mids = []
+        for p in rest:
+            c = self._rows[p]
+            mids.append(c.winfo_rooty() - self.list.winfo_rooty()
+                        + c.winfo_height() / 2.0)
+
+        gap = tk.Frame(self.list, bg="#171a20", bd=1, relief="sunken", height=h)
+        self._drag = {"pg": pg, "card": card, "gap": gap, "rest": rest,
+                      "mids": mids, "hold": hold, "index": None}
+        self._gap_to(min(idx, len(rest)))
+        card.configure(relief="raised", bd=2)
+        card.place(in_=self.list, x=4, y=y, width=w, height=h)
+        card.lift()
+
+    def _gap_to(self, j):
+        d = self._drag
+        if d["index"] == j:
+            return
+        d["index"] = j
+        gap = d["gap"]
+        gap.pack_forget()
+        opts = dict(fill="x", padx=4, pady=3)
+        if j < len(d["rest"]):
+            gap.pack(before=self._rows[d["rest"][j]], **opts)
+        elif self._tail is not None:
+            gap.pack(before=self._tail, **opts)
+        else:
+            gap.pack(**opts)
 
     def _haul(self, ev):
-        if self._drag_from is None:
+        d = self._drag
+        if not d:
             return
-        order, _rest = self.app._pg_ids
-        # Which card is the pointer over? Measured against the cards' own
-        # positions, so it works whatever their height turns out to be.
-        y = ev.y_root
-        for j, pg in enumerate(order):
-            card = self._rows.get(pg)
-            if card is None or not card.winfo_ismapped():
-                continue
-            top = card.winfo_rooty()
-            if top <= y < top + card.winfo_height():
-                if j != self._drag_from:
-                    order.insert(j, order.pop(self._drag_from))
-                    self._drag_from = j
-                    self.refill()
-                return
+        y = ev.y_root - self.list.winfo_rooty()
+        d["card"].place_configure(y=int(y - d["hold"]))
+
+        # Near an edge, the list comes to meet you - a page cannot be dragged
+        # somewhere you cannot see.
+        top, height = self.canvas.winfo_rooty(), self.canvas.winfo_height()
+        if ev.y_root < top + 26:
+            self.canvas.yview_scroll(-1, "units")
+        elif ev.y_root > top + height - 26:
+            self.canvas.yview_scroll(1, "units")
+
+        self._gap_to(sum(1 for m in d["mids"] if m < y))
 
     def _release(self, _ev):
-        if self._drag_from is not None:
-            self.app.pg_apply()
-        self._drag_from = None
+        d, self._drag = self._drag, None
+        if not d:
+            return
+        d["gap"].destroy()
+        d["card"].place_forget()
+        order = self.app._pg_ids[0]
+        order.remove(d["pg"])
+        order.insert(min(d["index"], len(order)), d["pg"])
+        self.refill()
+        self.app.pg_apply()
 
     # ---------------------------------------------------------- collecting
     def collect(self):

@@ -76,6 +76,7 @@ class Editor(ttk.Frame):
         self._from = None           # where the pointer was when it was picked up
         self._moaned = False
         self._photo_ref = None
+        self._snap = [False, False]
         self._build()
         self._tick()
 
@@ -114,6 +115,27 @@ class Editor(ttk.Frame):
         right = ttk.Frame(body)
         right.pack(side="left", fill="both", expand=True, pady=8)
 
+        # ---- the page itself: what it is called, and whether it wears the
+        # board's header. The name is drawn into the picture we send, so it is
+        # ours to keep - the board calls this slot MINE 3 and always will.
+        top = ttk.Frame(right)
+        top.pack(fill="x", padx=8, pady=(0, 6))
+        ttk.Label(top, text="Page name").pack(side="left")
+        self.name_var = tk.StringVar(
+            value=self.app.page_name(self.app.page_of(self.slot)))
+        ent = ttk.Entry(top, textvariable=self.name_var, width=16)
+        ent.pack(side="left", padx=6)
+        ent.bind("<KeyRelease>", lambda _e: self._rename())
+        self.hdr_var = tk.BooleanVar(value=self.app.header_of(self.slot))
+        ttk.Checkbutton(top, text="Header bar", variable=self.hdr_var,
+                        command=self._toggle_header).pack(side="left", padx=8)
+        ttk.Label(top, foreground="#666",
+                  text="the name and the page counter, in the board's own nine "
+                       "rows").pack(side="left")
+        self.grid_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top, text="Grid", variable=self.grid_var
+                        ).pack(side="right")
+
         self.canvas = tk.Canvas(right, width=CW, height=CH, bg="#0a0c0e",
                                 highlightthickness=1, highlightbackground="#555")
         self.canvas.pack(padx=8)
@@ -134,17 +156,31 @@ class Editor(ttk.Frame):
 
         ttk.Label(row, text="Shows").pack(side="left")
         self.f_var = tk.StringVar()
+        # The values are filled in per widget - a Lamp showing the clock is not
+        # a feature nobody thought of, it is a list that could not say no.
         self.f_box = ttk.Combobox(row, textvariable=self.f_var, width=15,
-                                  state="readonly",
-                                  values=[lbl for _k, lbl in WG.FIELDS])
+                                  state="readonly", values=[])
         self.f_box.pack(side="left", padx=4)
         self.f_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
 
-        ttk.Label(row, text="Label").pack(side="left", padx=(8, 0))
+        # Grouped so each can be taken away whole for the kinds that ignore it.
+        self.lab_grp = ttk.Frame(row)
+        ttk.Label(self.lab_grp, text="Label").pack(side="left", padx=(8, 0))
         self.l_var = tk.StringVar()
-        e = ttk.Entry(row, textvariable=self.l_var, width=8)
+        e = ttk.Entry(self.lab_grp, textvariable=self.l_var, width=8)
         e.pack(side="left", padx=4)
         e.bind("<KeyRelease>", lambda _e: self._edit())
+
+        # How a bar fills: solid, or one of the board's two fades - the
+        # song bar's faded track, or the rev counter's ramp.
+        self.fill_grp = ttk.Frame(row)
+        ttk.Label(self.fill_grp, text="Fill").pack(side="left", padx=(8, 0))
+        self.fill_var = tk.StringVar()
+        self.fill_box = ttk.Combobox(self.fill_grp, textvariable=self.fill_var,
+                                     width=12, state="readonly",
+                                     values=[lbl for _k, lbl in WG.FILLS])
+        self.fill_box.pack(side="left", padx=4)
+        self.fill_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
 
         # A second field, for the kinds that read two. Hidden the rest of the
         # time: one more combobox on every widget, greyed out on seven of the
@@ -153,8 +189,7 @@ class Editor(ttk.Frame):
         ttk.Label(self.row2, text="up / down shows").pack(side="left")
         self.fy_var = tk.StringVar()
         self.fy_box = ttk.Combobox(self.row2, textvariable=self.fy_var, width=15,
-                                   state="readonly",
-                                   values=[lbl for _k, lbl in WG.FIELDS])
+                                   state="readonly", values=[])
         self.fy_box.pack(side="left", padx=4)
         self.fy_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
         ttk.Label(self.row2, foreground="#666",
@@ -162,15 +197,36 @@ class Editor(ttk.Frame):
                   ).pack(side="left", padx=10)
 
         self.spins = {}
-        for name, lo, hi in (("size", 6, 30), ("w", 1, WG.W), ("h", 1, WG.H)):
-            ttk.Label(row, text=name).pack(side="left", padx=(8, 0))
+
+        def spin(parent, name, lo, hi):
+            ttk.Label(parent, text=name).pack(side="left", padx=(8, 0))
             v = tk.IntVar()
-            sp = ttk.Spinbox(row, from_=lo, to=hi, width=4, textvariable=v,
+            sp = ttk.Spinbox(parent, from_=lo, to=hi, width=4, textvariable=v,
                              command=self._edit)
             sp.pack(side="left", padx=2)
             sp.bind("<KeyRelease>", lambda _e: self._edit())
             self.spins[name] = v
+
+        self.size_grp = ttk.Frame(row)
+        spin(self.size_grp, "size", 6, 30)
+        self.wh_grp = ttk.Frame(row)
+        self.wh_grp.pack(side="left")
+        spin(self.wh_grp, "w", 1, WG.W)
+        spin(self.wh_grp, "h", 1, WG.H)
         ttk.Button(row, text="Delete", command=self._delete).pack(side="right")
+
+    def _rename(self):
+        self.app.set_page_name(self.slot, self.name_var.get())
+        win = self.winfo_toplevel()
+        if isinstance(win, EditorWindow):
+            win.title("PicoPanel - %s"
+                      % self.app.page_name(self.app.page_of(self.slot)))
+
+    def _toggle_header(self):
+        self.app.set_header(self.slot, self.hdr_var.get())
+
+    def _head(self):
+        return self.app.header_for(self.slot)
 
     # ------------------------------------------------ off the shelf and on
     def _pick(self, kind, defaults, ev):
@@ -262,23 +318,60 @@ class Editor(ttk.Frame):
         if not self.sel or self._drag is None:
             return
         dx, dy = self._drag
-        self.sel.x = max(0, min(WG.W - 1, ev.x // ZOOM - dx))
-        self.sel.y = max(0, min(WG.H - 1, ev.y // ZOOM - dy))
+        w = self.sel
+        x = max(0, min(WG.W - 1, ev.x // ZOOM - dx))
+        y = max(0, min(WG.H - 1, ev.y // ZOOM - dy))
+        # Snap to the middle of the SCREEN, within a couple of pixels. Knowing
+        # where the middle is was the thing that was actually wanted; a line
+        # you can see and a widget that clicks onto it beats counting pixels.
+        self._snap = [False, False]
+        if abs((x + w.w / 2.0) - WG.W / 2.0) <= 2:
+            x = int(round(WG.W / 2.0 - w.w / 2.0))
+            self._snap[0] = True
+        if abs((y + w.h / 2.0) - WG.H / 2.0) <= 2:
+            y = int(round(WG.H / 2.0 - w.h / 2.0))
+            self._snap[1] = True
+        w.x, w.y = x, y
 
     def _up(self, _ev):
         if self._drag is not None:
             self._save()
         self._drag = None
+        self._snap = [False, False]
 
     def _show_props(self):
         w = self.sel
         if not w:
             return
+        # Only what this kind can actually do. Everything else is taken away
+        # rather than greyed out: a control that does nothing invites you to
+        # turn it and then wonder what you broke.
+        allowed = WG.fields_for(w.kind)
+        keys = [k for k, _l in allowed]
+        if allowed and w.field not in keys:
+            w.field = keys[0]          # a layout from before the lists existed
+            self._save()
+        self.f_box["values"] = [lbl for _k, lbl in allowed]
+        self.fy_box["values"] = [lbl for _k, lbl in allowed]
         if w.kind in WG.TWO_FIELD:
             self.row2.pack(fill="x", padx=6, pady=(0, 4))
             self.fy_var.set(WG.FIELD_LABEL.get(w.field_y, w.field_y))
         else:
             self.row2.pack_forget()
+        if w.kind in WG.USES_LABEL:
+            self.lab_grp.pack(side="left", before=self.wh_grp)
+        else:
+            self.lab_grp.pack_forget()
+        if w.kind in WG.HAS_FILL:
+            self.fill_grp.pack(side="left", before=self.wh_grp)
+            self.fill_var.set(WG.FILL_LABEL.get(w.opts.get("fill", "solid"),
+                                                "Solid"))
+        else:
+            self.fill_grp.pack_forget()
+        if w.kind in WG.USES_SIZE:
+            self.size_grp.pack(side="left", before=self.wh_grp)
+        else:
+            self.size_grp.pack_forget()
         self.f_var.set(WG.FIELD_LABEL.get(w.field, w.field))
         self.l_var.set(w.label)
         self.spins["size"].set(w.size)
@@ -299,6 +392,11 @@ class Editor(ttk.Frame):
             if lbl == want_y:
                 w.field_y = key
                 break
+        if w.kind in WG.HAS_FILL:
+            for key, lbl in WG.FILLS:
+                if lbl == self.fill_var.get():
+                    w.opts["fill"] = key
+                    break
         w.label = self.l_var.get()
         try:
             w.size = int(self.spins["size"].get())
@@ -314,11 +412,13 @@ class Editor(ttk.Frame):
     # ------------------------------------------------------------ painting
     def _tick(self):
         try:
-            img = WG.render(self.items, self.app.widget_data())
+            img = WG.render(self.items, self.app.widget_data(),
+                            header=self._head())
             if img is not None:
                 self._photo_ref = _photo(img)
                 self.canvas.delete("all")
                 self.canvas.create_image(0, 0, anchor="nw", image=self._photo_ref)
+                self._grid()
                 if self.sel:
                     w = self.sel
                     self.canvas.create_rectangle(
@@ -337,9 +437,30 @@ class Editor(ttk.Frame):
                     pass
         self.after(100, self._tick)
 
+    def _grid(self):
+        """The screen's own grid, over the picture but never in it.
+
+        Eight pixels, because that is the band the panel's memory is organised
+        in and what every drawn row lines up with anyway. The middle of the
+        screen is marked brighter, and brighter still while a widget is
+        snapped to it - which is the question this answers: where IS the
+        middle.
+        """
+        if not self.grid_var.get():
+            return
+        for gx in range(8, WG.W, 8):
+            self.canvas.create_line(gx * ZOOM, 0, gx * ZOOM, CH, fill="#1c2a36")
+        for gy in range(8, WG.H, 8):
+            self.canvas.create_line(0, gy * ZOOM, CW, gy * ZOOM, fill="#1c2a36")
+        mx, my = WG.W // 2 * ZOOM, WG.H // 2 * ZOOM
+        self.canvas.create_line(mx, 0, mx, CH, dash=(5, 4),
+                                fill="#e8744f" if self._snap[0] else "#3f6c8c")
+        self.canvas.create_line(0, my, CW, my, dash=(5, 4),
+                                fill="#e8744f" if self._snap[1] else "#3f6c8c")
+
     # -------------------------------------------------------------- output
     def frame_bytes(self):
-        img = WG.render(self.items, self.app.widget_data())
+        img = WG.render(self.items, self.app.widget_data(), header=self._head())
         return None if img is None else WG.to_frame(img)
 
 

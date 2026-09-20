@@ -529,8 +529,9 @@ class App(tk.Tk):
 
         self._build_settings()
 
-        self.editor = editor.Editor(self.tabs, self, slot=0)
-        self.tabs.add(self.editor, text="Widgets")
+        # No Widgets tab. It was one page of the eight, permanently open, from
+        # before a page could be opened in its own window - and it invited you
+        # to lay out slot 0 whether or not that page even existed.
         self.tabs.bind("<<NotebookTabChanged>>", self._preview_follow)
 
         logf = ttk.LabelFrame(self, text="Log")
@@ -694,7 +695,49 @@ class App(tk.Tk):
     # ---- the page rotation ----------------------------------------------
     # ---- the pages -------------------------------------------------------
     def page_name(self, pg):
+        """What to call it. Yours can be renamed; the board's cannot - those
+        names are its own and appear in its header."""
+        slot = self.slot_of(pg)
+        if slot is not None:
+            mine = (self.cfg.get("page_names") or {}).get(str(slot))
+            if mine:
+                return mine
         return PAGE_NAMES[pg] if 0 <= pg < len(PAGE_NAMES) else "?"
+
+    def set_page_name(self, slot, name):
+        names = dict(self.cfg.get("page_names") or {})
+        name = (name or "").strip()
+        if name:
+            names[str(slot)] = name[:16]     # the header is 128 pixels wide
+        else:
+            names.pop(str(slot), None)       # empty: back to MINE n
+        self.cfg["page_names"] = names
+        settings.save(self.cfg)
+        self.pg_cards.refill()
+
+    def page_of(self, slot):
+        """The page number of one of your slots."""
+        return CUSTOM_FIRST + slot
+
+    def header_of(self, slot):
+        """Does that page wear the board's header bar? Yes unless told not."""
+        return bool((self.cfg.get("page_headers") or {}).get(str(slot), True))
+
+    def set_header(self, slot, on):
+        h = dict(self.cfg.get("page_headers") or {})
+        h[str(slot)] = bool(on)
+        self.cfg["page_headers"] = h
+        settings.save(self.cfg)
+
+    def header_for(self, slot):
+        """The two strings the header shows: the name, and where the page sits
+        in the rotation - the same counter the board puts on its own pages."""
+        if not self.header_of(slot):
+            return None
+        pg = CUSTOM_FIRST + slot
+        order = self._pg_ids[0]
+        where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
+        return (self.page_name(pg), where)
 
     def slot_of(self, pg):
         """Which of the pages you draw yourself this is, or None."""
@@ -764,9 +807,10 @@ class App(tk.Tk):
         if win is not None and win.winfo_exists():
             win.destroy()
         self.cfg["custom_pages"] = [i for i in self.custom_slots() if i != slot]
-        lay = dict(self.cfg.get("layouts") or {})
-        lay.pop(str(slot), None)
-        self.cfg["layouts"] = lay
+        for key in ("layouts", "page_names", "page_headers"):
+            d = dict(self.cfg.get(key) or {})
+            d.pop(str(slot), None)
+            self.cfg[key] = d
         settings.save(self.cfg)
         order, rest = self._pg_ids
         if pg in order:
@@ -1279,12 +1323,18 @@ class App(tk.Tk):
                 next_page = now + page_period
                 try:
                     items = [WG.Widget.from_dict(d) for d in self.layout_of(slot)]
-                    img = WG.render(items, self.widget_data())
+                    img = WG.render(items, self.widget_data(),
+                                    header=self.header_for(slot))
                     if img is not None:
                         b = base64.b64encode(WG.to_frame(img)).decode()
                         self.link.send("%%cv=%d,%s" % (slot, b), echo=False)
-                except Exception:
-                    pass                # a bad layout must not stop telemetry
+                except Exception as e:
+                    # Once. A page that quietly stops being sent looks exactly
+                    # like a page nobody has drawn yet, and the board says so
+                    # in good faith: "no layout yet".
+                    if not getattr(self, "_cv_moaned", False):
+                        self._cv_moaned = True
+                        self.q.put(("err", "the page is not being sent: %s" % e))
 
             self._stop_send.wait(period)
 

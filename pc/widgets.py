@@ -52,6 +52,41 @@ FIELDS = [
 ]
 FIELD_LABEL = dict(FIELDS)
 
+# What each kind is allowed to be pointed at. A lamp showing the clock is not
+# a feature nobody thought of, it is a list that could not be bothered to say
+# no - and every wrong entry in a menu is a wrong thing somebody will try once
+# and then distrust the rest.
+_TEXTY = ["src", "text", "np_title", "np_artist", "clock"]
+_NUMERIC = ["speed_kmh", "rpm", "rpm_max", "redline", "gear", "fuel_pct",
+            "throttle", "brake", "turbo_bar", "engine_c", "kts", "vspeed_fpm",
+            "alt_ft", "hdg", "gforce", "aoa"]
+_AXES = ["joy_x", "joy_y", "joy_z", "joy_r"]
+# A fill or a needle needs something with a top end. "How much of it" makes no
+# sense for a heading or a vertical speed, which run in both directions and
+# have no full scale to fill towards.
+_SCALED = ["rpm", "speed_kmh", "fuel_pct", "throttle", "brake", "turbo_bar",
+           "engine_c", "kts", "alt_ft", "gforce", "aoa"]
+
+KIND_FIELDS = {
+    "value": _NUMERIC + _TEXTY,       # a number, or a string, either reads
+    "label": _TEXTY + ["none"],       # text only: a bare number is a Number
+    "bar":   _SCALED,
+    "vbar":  _SCALED,
+    "dial":  _SCALED,
+    "lamp":  _NUMERIC + _AXES,        # lit when it is not zero
+    "box":   ["none"],                # decoration: it reads nothing at all
+    "line":  ["none"],
+    "axis":  _AXES + ["throttle", "brake", "gforce", "aoa"],
+}
+
+
+def fields_for(kind):
+    """The (key, label) pairs a kind may be pointed at, in the usual order."""
+    ok = KIND_FIELDS.get(kind)
+    if ok is None:
+        return list(FIELDS)
+    return [(k, lbl) for k, lbl in FIELDS if k in ok]
+
 _font_cache = {}
 
 
@@ -156,21 +191,82 @@ def _d_label(d, w, data):
     d.text((w.x, w.y), w.label or _text_of(w, data), font=_font(w.size), fill=1)
 
 
+# The board's own 4x4 ordered dither, the same sixteen numbers. One bit per
+# pixel has no half-lit, so a fade is a pattern - and it has to be THIS pattern,
+# or a bar drawn here would shimmer next to one drawn there.
+BAYER4 = (0, 8, 2, 10,
+          12, 4, 14, 6,
+          3, 11, 1, 9,
+          15, 7, 13, 5)
+
+# What a bar can be filled with. "track" is the song bar: the whole length
+# faded, the played part solid. "ramp" is the rev counter: thin at the left,
+# solid by the right-hand end.
+FILLS = [("solid", "Solid"), ("track", "Faded track"), ("ramp", "Fade in")]
+FILL_LABEL = dict(FILLS)
+HAS_FILL = {"bar", "vbar"}
+
+
+def _dither(d, x0, y0, x1, y1, level, lv2=None, along="x"):
+    """A rectangle of dither. One level, or a ramp between two along an axis.
+
+    The points go in one call: PIL will take a whole list, and a bar is a few
+    hundred pixels fifteen times a second.
+    """
+    x0, y0 = int(x0), int(y0)
+    x1, y1 = int(x1), int(y1)
+    if x1 < x0 or y1 < y0:
+        return
+    span = (x1 - x0) if along == "x" else (y1 - y0)
+    pts = []
+    for j in range(y0, y1 + 1):
+        for i in range(x0, x1 + 1):
+            lv = level
+            if lv2 is not None and span > 0:
+                k = (i - x0) if along == "x" else (y1 - j)
+                lv = level + (lv2 - level) * k // span
+            if BAYER4[((j & 3) << 2) | (i & 3)] < lv:
+                pts.append((i, j))
+    if pts:
+        d.point(pts, fill=1)
+
+
 def _d_bar(d, w, data):
     d.rectangle([w.x, w.y, w.x + w.w - 1, w.y + w.h - 1], outline=1)
-    inner = w.w - 4
+    # A two-pixel inset inside a four-pixel bar leaves nothing to fill, and a
+    # thin bar is exactly what a progress bar wants to be.
+    pad = 2 if w.h >= 8 else 1
+    inner = w.w - 2 * pad
     n = int(inner * _fraction(w, data))
-    if n > 0:
-        d.rectangle([w.x + 2, w.y + 2, w.x + 1 + n, w.y + w.h - 3], fill=1)
+    style = w.opts.get("fill", "solid")
+    top, bot = w.y + pad, w.y + w.h - 1 - pad
+    if style == "track":
+        _dither(d, w.x + pad, top, w.x + pad - 1 + inner, bot, 5)
+        if n > 0:
+            d.rectangle([w.x + pad, top, w.x + pad - 1 + n, bot], fill=1)
+    elif style == "ramp":
+        _dither(d, w.x + pad, top, w.x + pad - 1 + n, bot, 3, 16, "x")
+    elif n > 0:
+        d.rectangle([w.x + pad, top, w.x + pad - 1 + n, bot], fill=1)
 
 
 def _d_vbar(d, w, data):
     d.rectangle([w.x, w.y, w.x + w.w - 1, w.y + w.h - 1], outline=1)
-    inner = w.h - 4
+    pad = 2 if w.w >= 8 else 1
+    inner = w.h - 2 * pad
     n = int(inner * _fraction(w, data))
-    if n > 0:
-        d.rectangle([w.x + 2, w.y + w.h - 2 - n, w.x + w.w - 3, w.y + w.h - 3],
-                    fill=1)
+    style = w.opts.get("fill", "solid")
+    left, right = w.x + pad, w.x + w.w - 1 - pad
+    bot = w.y + w.h - 1 - pad
+    top = bot - n + 1
+    if style == "track":
+        _dither(d, left, w.y + pad, right, bot, 5)
+        if n > 0:
+            d.rectangle([left, top, right, bot], fill=1)
+    elif style == "ramp":
+        _dither(d, left, top, right, bot, 3, 16, "y")
+    elif n > 0:
+        d.rectangle([left, top, right, bot], fill=1)
 
 
 def _d_dial(d, w, data):
@@ -207,7 +303,7 @@ def _axis(data, key):
 
 
 def _d_dz(d, w, data):
-    """The deadzone: a box, the middle, and where you actually are.
+    """Two axes at once: a box, the middle, and where you actually are.
 
     One bit per pixel, so "in the middle" cannot be a colour. The middle box
     FILLS when you are inside it and the dot goes hollow - a state you can read
@@ -255,11 +351,20 @@ def _d_line(d, w, data):
 DRAW = {
     "value": _d_value, "label": _d_label, "bar": _d_bar, "vbar": _d_vbar,
     "dial": _d_dial, "lamp": _d_lamp, "box": _d_box, "line": _d_line,
-    "dz": _d_dz,
+    # "dz" was what this was called for an afternoon; a layout saved then
+    # still names it that, and a saved page that stops drawing is not a
+    # rename, it is a bug.
+    "axis": _d_dz, "dz": _d_dz,
 }
 
 # The kinds that read two fields, so the editor knows when to offer a second.
-TWO_FIELD = {"dz"}
+TWO_FIELD = {"axis", "dz"}
+
+# Which kinds actually use the text size and the caption. A spinbox that does
+# nothing is worse than no spinbox: it invites you to turn it and then makes
+# you wonder what you broke.
+USES_SIZE = {"value", "label"}
+USES_LABEL = {"value", "label", "lamp"}
 
 # What the palette shows, and what a fresh one of each looks like.
 PALETTE = [
@@ -271,17 +376,51 @@ PALETTE = [
     ("lamp",  "Lamp",       dict(w=30, h=9, field="brake", label="BRK")),
     ("box",   "Frame",      dict(w=60, h=20, field="none")),
     ("line",  "Line",       dict(w=40, h=1, field="none")),
-    ("dz",    "Centering",  dict(w=30, h=30, field="joy_x", field_y="joy_y")),
+    ("axis",  "Axis",       dict(w=30, h=30, field="joy_x", field_y="joy_y")),
 ]
 
 
-def render(widgets, data):
-    """The whole 128x32 page as a PIL image, or None without PIL."""
+HEADER_H = 9            # the same nine rows the board's own header uses
+
+
+def header_bar(d, text, right=""):
+    """The board's header, drawn here: a white bar, black text, the name on
+    the left and the counter on the right.
+
+    The board draws this for its own pages in a 5x7 font. A page of yours is
+    one picture from here, so if it is to have a header, this has to draw it -
+    in Tahoma 9, which is what the panel's Cyrillic titles already use and sits
+    beside the board's own text without looking like a different machine.
+    """
+    f = _font(9)
+    d.rectangle([0, 0, W - 1, HEADER_H - 1], fill=1)
+    d.text((2, -1), text, font=f, fill=0)
+    if right:
+        try:
+            wpx = d.textlength(right, font=f)
+        except Exception:
+            wpx = 6 * len(right)
+        d.text((W - 2 - wpx, -1), right, font=f, fill=0)
+
+
+def render(widgets, data, header=None):
+    """The whole 128x32 page as a PIL image, or None without PIL.
+
+    `header` is ("NAME", "3/11") to put the board's own header bar on top, or
+    None for the whole screen. The widgets are drawn AFTER it, so a layout
+    made before the header existed still shows rather than disappearing under
+    a bar nobody has moved it out of yet.
+    """
     if not HAVE_PIL:
         return None
     img = Image.new("1", (W, H), 0)
     d = ImageDraw.Draw(img)
     d.fontmode = "1"                 # 1-bit screen: antialiasing is mud
+    if header:
+        try:
+            header_bar(d, header[0], header[1] if len(header) > 1 else "")
+        except Exception:
+            pass
     for w in widgets:
         fn = DRAW.get(w.kind)
         if not fn:

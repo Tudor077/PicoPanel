@@ -349,8 +349,14 @@ through the board's mirror and puts the panel back where it was. About three
 seconds for all fourteen. A mock-up would be a second drawing of every page, and
 the moment the firmware changed one it would start lying.
 
-Drag a card by its handle to reorder. Clicking one shows it on the panel.
-Double-clicking one of **your own** pages opens its editor in a window.
+Drag a card by its handle to reorder: the card comes out of the list and
+follows the pointer, and a gap opens where it will land. It used to jump to the
+new position the moment the pointer crossed a card - correct, and it felt like
+the list was arguing with you rather than being held. Near the top or bottom
+edge the list scrolls to meet you.
+
+Clicking a card shows that page on the panel. Double-clicking one of **your
+own** opens its editor in a window.
 
 GAME and MUSIC have faces of their own - the sub-pages USER walks without
 leaving the page - and those are shown indented underneath, with their own
@@ -411,12 +417,38 @@ board:
 the default: if yours dislikes it the screen fills with rubbish and you come
 back here and set it down.
 
-## The Widgets tab: a page you lay out yourself
+## The editor: a page you lay out yourself
 
 The board has a 5x7 font and about eight shapes. The PC has every font Windows
 ships and a drawing library - so the widgets live there, and what crosses the
 wire is the finished picture: 512 bytes in the exact layout of the panel's own
 memory, which makes the board's side of it a `memcpy`.
+
+**Each page has a name and a header.** The board calls the slot `MINE 3` and
+always will - the name lives in the picture the app sends, so it is the app's
+to keep. With the header on, the page wears the same bar the board's own pages
+wear: the name on the left, where the page sits in the rotation on the right,
+in the same nine rows. It is drawn in Tahoma 9, which is what the panel's
+Cyrillic titles already use, so it sits beside the board's own text without
+looking like a different machine.
+
+**The grid is the editor's, not the panel's.** Eight pixels, because that is
+the band the display's memory is organised in and what every drawn row lines up
+with anyway. The middle of the screen is marked, and a widget dragged within
+two pixels of it snaps there and lights the line - which is the question it
+answers: where IS the middle.
+
+**Only what the kind can do.** The field list is per widget: a Lamp cannot be
+pointed at the clock, a Bar cannot be pointed at a heading (there is no full
+scale to fill towards), a Frame reads nothing at all. The size and the caption
+disappear for the kinds that ignore them, rather than sitting there greyed out
+inviting you to turn them and wonder what broke.
+
+**Bars fill three ways.** Solid; the song bar's *faded track*, where the whole
+length is dithered and the played part solid; and the rev counter's *fade in*,
+thin at the start and solid by the end. The same 4x4 ordered dither the
+firmware uses, the same sixteen numbers - a bar drawn here sits next to one
+drawn there without shimmering.
 
 The shelf runs down the side, one picture per widget. Pick one up and it follows
 the pointer - a small borderless window with the icon in it - and drops where
@@ -437,9 +469,9 @@ through the mirror and comparing: identical, byte for byte.
 | Needle | a dial, ticks rather than an arc |
 | Lamp | filled when the field is non-zero, outlined when it isn't |
 | Frame / Line | for dividing things up |
-| Centering | two axes at once: a box, a deadzone, and where you are in it |
+| Axis | two axes at once: a box, a deadzone, and where you are in it |
 
-**Centering** is the one widget that reads two fields - it grows a second row
+**Axis** is the one widget that reads two fields - it grows a second row
 in the properties, for the up/down axis. The middle box is the deadzone: it
 FILLS when you are inside it and the dot disappears, because a dot drawn on top
 of a filled box punches a hole in it and a hole looks exactly like an empty box.

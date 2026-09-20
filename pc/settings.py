@@ -56,6 +56,16 @@ DEFAULTS = {
     # The board never sees these - it only ever gets the finished picture.
     "layouts": {},
 
+    # What you have called your own pages, by slot: {"0": "TURBO"}. The board
+    # calls them MINE 1..8 and always will - the name is drawn into the picture
+    # the app sends, so it is the app's to keep.
+    "page_names": {},
+
+    # Which of them draw the board's header bar - the name and the counter, in
+    # the same nine rows the board uses for its own pages. On by default: a
+    # page with no name on it is the odd one out in the rotation.
+    "page_headers": {},
+
     # Which of the board's eight drawable pages you have actually made. The
     # slots all exist in the firmware; this says which ones are yours, so the
     # list shows the pages you built and not eight empty ones.
