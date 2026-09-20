@@ -506,6 +506,12 @@ the whole time - so the new title was arriving behind a bar that was not on
 screen, which looks exactly like nothing happening. `%wk` is one command that
 does nothing but say somebody is doing something meant to be seen.
 
+The settings column scrolls, like the page list beside it - Screen, Options and
+Alarms stacked are taller than the window at its smallest, and Alarms is the one
+that fell off the bottom. The wheel works anywhere over it: Tk hands the wheel
+to the innermost widget under the pointer, and a column of settings is a hundred
+of them, so it is bound to all of them.
+
 **Settings -> Screen -> How things appear** picks the style: *classic* down from
 the top, *wipe* in from the left like the splash, *type* a letter at a time, or
 *none*. Classic is the default because it is what the rest of the panel already

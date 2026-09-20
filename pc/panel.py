@@ -655,10 +655,12 @@ class App(tk.Tk):
                    command=self._preset_del).pack(side="left", padx=2)
         self._preset_refresh()
 
-        # ---- everything else, stacked down the right-hand side. Side by
-        # side, the third panel fell off the edge of the window.
-        rest = ttk.Frame(page)
-        rest.pack(side="left", fill="both", expand=True, **pad)
+        # ---- everything else, stacked down the right-hand side, in a column
+        # you can scroll. Side by side, the third panel fell off the edge of
+        # the window; stacked, the bottom one did - and Alarms is the one you
+        # have to scroll to, on a window that is not maximised.
+        rest = self._scroller(page, side="left", fill="both", expand=True,
+                              **pad)
 
         scr = ttk.LabelFrame(rest, text="Screen")
         scr.pack(fill="x")
@@ -771,7 +773,40 @@ class App(tk.Tk):
         self._had_alarm = False
         self.after(3000, self._alarm_tick)
 
+        # The wheel, on everything in that column: Tk hands it to the
+        # innermost widget under the pointer, and a column of settings is a
+        # hundred of them.
+        self._wheel_all(rest, rest._canvas)
+
         self._pg_load()
+
+    def _scroller(self, parent, **pack):
+        """A column that scrolls. Tk gives you one or the other - a frame that
+        sizes itself to its contents, or a window onto one - so this is the
+        usual canvas with a frame inside it."""
+        box = ttk.Frame(parent)
+        box.pack(**pack)
+        canvas = tk.Canvas(box, highlightthickness=0, width=380,
+                           background=self.cget("background"))
+        bar = ttk.Scrollbar(box, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = ttk.Frame(canvas)
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(win, width=e.width))
+        inner._canvas = canvas
+        return inner
+
+    def _wheel_all(self, wdg, canvas):
+        """Bind the wheel to a widget and everything inside it."""
+        wdg.bind("<MouseWheel>",
+                 lambda e: canvas.yview_scroll(-e.delta // 120, "units"))
+        for kid in wdg.winfo_children():
+            self._wheel_all(kid, canvas)
 
     # ---- the page rotation ----------------------------------------------
     # ---- the pages -------------------------------------------------------
