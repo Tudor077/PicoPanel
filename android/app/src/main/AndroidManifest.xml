@@ -10,7 +10,14 @@
          app, carrying the next alarm's time. The foreground service is not a
          choice - since Android 8 the "next alarm changed" broadcast only
          reaches a process that is already running, and an app with nothing
-         running cannot be told anything. -->
+         running cannot be told anything.
+
+         usesCleartextTraffic, on the application below, is not a choice
+         either: from targetSdk 28 Android refuses plain HTTP outright, and
+         the desktop app is a program on your own LAN with no certificate and
+         no name to put one in. It threw IOException and said nothing else,
+         which cost an evening. A network security config cannot help - it
+         whitelists hostnames, and this is an address you type in. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -19,6 +26,7 @@
 
     <application
         android:label="@string/app_name"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.NoActionBar"

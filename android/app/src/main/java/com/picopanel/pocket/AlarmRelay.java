@@ -138,7 +138,12 @@ public class AlarmRelay {
                     : "told the panel there is no alarm (" + code + ")");
         } catch (Throwable t) {
             lastSent = -1;                     // failed: say it again next time
-            say("could not reach " + host + ": " + t.getClass().getSimpleName());
+            // The message, not just the class. "IOException" on its own is
+            // what a blocked cleartext connection looks like, and it told
+            // nobody anything.
+            String why = t.getMessage();
+            say("could not reach " + host + ": " + t.getClass().getSimpleName()
+                + (why == null ? "" : " - " + why));
         } finally {
             if (c != null) c.disconnect();
         }
