@@ -45,6 +45,10 @@ DEFAULTS = {
     "page_order": None,     # None = the board's own order, all of them
     "rpm_style": 0,         # 0 a bar, 1 a needle
     "i2c_khz": 400,
+
+    # The widgets you laid out for the CUSTOM page, as a list of dicts. The
+    # board never sees this - it only ever gets the finished picture.
+    "custom_page": None,
 }
 
 

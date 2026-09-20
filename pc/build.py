@@ -77,6 +77,9 @@ def main():
         "--hidden-import", "icon",
         # Synced lyrics for the karaoke page.
         "--hidden-import", "lyrics",
+        # The widget library and its editor.
+        "--hidden-import", "widgets",
+        "--hidden-import", "editor",
         "--hidden-import", "PIL.ImageFont",
         "--hidden-import", "PIL.ImageDraw",
         # UI Automation, for an app's own volume slider. comtypes builds the

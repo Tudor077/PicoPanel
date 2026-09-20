@@ -333,6 +333,22 @@ static Marquee marq[6];
    next heartbeat happened to land would be up to half a second late, which on
    a sung line you can see. With the timestamp, the board changes it against its
    own clock - the same one that already runs the progress bar forward. */
+/* The page the PC draws.
+
+   Whole frames, not a description of them. The board has a 5x7 font and eight
+   shapes; the PC has every font Windows ships and a drawing library, so the
+   widgets live there and what crosses the wire is the picture. It is the same
+   trick the titles already use, at full size: 512 bytes, the exact layout of
+   the panel's own memory, so drawing it is a memcpy.
+
+   Sent only while this page is actually showing - see !PAGE below. Streaming
+   ten kilobytes a second at a page nobody is looking at would be silly. */
+#define CUS_BYTES 512
+uint8_t  cusBuf[CUS_BYTES];
+uint16_t cusLen  = 0;
+uint32_t cusSeen = 0;
+#define CUS_STALE_MS 2500UL
+
 #define LYR_BMP_MAX 250
 uint8_t  lyrCurBmp[LYR_BMP_MAX];
 uint16_t lyrCurW = 0;
@@ -486,6 +502,10 @@ SwGroup sw3 = { "SW3", SW3_PINS, 6, 5, 0, {0}, 0x3F, 0, 0, -1, -1, 0, 0, 0, 0 };
 // Position number of a throw, accounting for the common pin and the orientation.
 // Has the PC app spoken lately? Everything per-app depends on it being there.
 static bool audFresh() { return audSeen && (millis() - audSeen) < AUD_STALE_MS; }
+// Below the structs, not up with the buffer it reads: Arduino puts its
+// generated prototypes above the FIRST function definition in the file, and
+// from up there `struct SwGroup` does not exist yet.
+static bool cusFresh() { return cusLen && (millis() - cusSeen) < CUS_STALE_MS; }
 static bool npFresh()  { return npSeen  && (millis() - npSeen)  < NP_STALE_MS;  }
 static bool audShowing() { return audTouch && (millis() - audTouch) < AUD_SHOW_MS; }
 // The words are live when the PC is still talking to us AND says there are
@@ -566,8 +586,8 @@ volatile uint32_t encChgB = 0;
 volatile uint8_t  encTrig = '?';
 
 // ------------------------------------------------------------------ state --
-enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC, P_HID, P_SW, P_ENC, P_BTN, P_PCF,
-            P_I2C, P_INFO, P_COUNT };
+enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC, P_CUSTOM, P_HID, P_SW, P_ENC,
+            P_BTN, P_PCF, P_I2C, P_INFO, P_COUNT };
 
 // MUSIC has two faces: what's playing, and the words. A page of its own was
 // tried and it is one more thing to walk past - they are the same subject, and
@@ -576,8 +596,8 @@ uint8_t  musicSub = 0;      // 0 = now playing, 1 = karaoke
 #define MUSIC_SUBS 2
 
 const char *PAGE_NAME[P_COUNT] =
-  { "PANEL", "GAME", "MUSIC", "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574",
-    "I2C", "INFO" };
+  { "PANEL", "GAME", "MUSIC", "CUSTOM", "HID", "SWITCHES", "ENCODER", "BUTTONS",
+    "PCF8574", "I2C", "INFO" };
 
 uint8_t  page       = P_OVERVIEW;
 
@@ -593,8 +613,8 @@ uint8_t  page       = P_OVERVIEW;
 // the app, and read by audParse long before the drawing code exists.
 uint8_t  rpmStyle = 0;
 
-uint8_t  pageList[P_COUNT] = { P_OVERVIEW, P_GAME, P_MUSIC, P_HID, P_SW,
-                               P_ENC, P_BTN, P_PCF, P_I2C, P_INFO };
+uint8_t  pageList[P_COUNT] = { P_OVERVIEW, P_GAME, P_MUSIC, P_CUSTOM, P_HID,
+                               P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO };
 uint8_t  pageListN = P_COUNT;
 uint8_t  pageSlot  = 0;          // where we are in that list
 
@@ -1811,6 +1831,11 @@ void audParse(char *s) {
     } else if (!strcasecmp(key, "ka")) {
       lyrState = (uint8_t)atoi(val);
     }
+    // "%cv=<base64>" - one whole frame for the custom page.
+    else if (!strcasecmp(key, "cv")) {
+      uint16_t got = b64Decode(val, cusBuf, CUS_BYTES);
+      if (got) { cusLen = got; cusSeen = millis(); }
+    }
     /* "%pg=1,2,0,3" - the rotation, in order, by page number. Anything left
        out simply isn't in it. An empty or nonsense list is ignored rather
        than obeyed: a panel you cannot navigate is worse than one whose order
@@ -1835,6 +1860,13 @@ void audParse(char *s) {
     }
     else if (!strcasecmp(key, "rs")) {
       rpmStyle = (atoi(val) == 1) ? 1 : 0;
+    }
+    // "%gp=3" - show that page now. The app uses it as a preview: you click a
+    // page in the list and the panel shows it, which beats any mock-up because
+    // it is the real thing and cannot drift.
+    else if (!strcasecmp(key, "gp")) {
+      int id = atoi(val);
+      if (id >= 0 && id < P_COUNT) pageGoto((uint8_t)id);
     }
     else if (!strcasecmp(key, "pg")) {
       uint8_t tmp[P_COUNT], n = 0;
@@ -1997,6 +2029,18 @@ static void burnService() {
   step = (uint8_t)((step + 1) % 9);
   burnX = (int8_t)(step % 3) - 1;         // -1, 0, +1
   burnY = (int8_t)(step / 3) - 1;
+}
+
+/* The PC needs to know which page is showing, so it can send frames for the
+   custom one and stay quiet otherwise. Said on CHANGE rather than in the status
+   line, because the status line only goes out when reporting is switched on and
+   this has to work regardless. */
+static void pageAnnounce() {
+  static uint8_t said = 255;
+  if (page == said) return;
+  said = page;
+  Serial.print(F("!PAGE "));
+  Serial.println(page);
 }
 
 // Move the finished frame by (dx, dy). One pixel each way, which is all the
@@ -2462,6 +2506,24 @@ void drawAudioPicker() {
    millisecond each begins; here we compare that against the same running clock
    the progress bar uses, so the line turns over on time rather than on the next
    heartbeat. */
+/* Straight into the panel's memory. The PC sends the bytes in exactly the
+   layout the SSD1306 uses - one byte per column per eight-row page - so there
+   is nothing to convert, and the header is deliberately overwritten: this page
+   belongs to whoever laid it out, all thirty-two rows of it. */
+void drawCustom() {
+  if (!cusFresh()) {
+    oled->setTextSize(1);
+    oled->setCursor(0, gTop + 2);
+    oled->print(F("no layout yet"));
+    oled->setCursor(0, gTop + 12);
+    oled->print(F("build one in the app"));
+    return;
+  }
+  uint16_t n = (uint16_t)SCREEN_W * oledH / 8;
+  if (n > cusLen) n = cusLen;
+  memcpy(oled->getBuffer(), cusBuf, n);
+}
+
 void drawKaraoke() {
   oled->setTextSize(1);
 
@@ -3331,6 +3393,7 @@ void render() {
     case P_MUSIC:
       if (musicSub == 1) drawKaraoke(); else drawMusic();
       break;
+    case P_CUSTOM:   drawCustom();   break;
     case P_GAME:     drawGame();     break;
   }
   // Only on the game page. That is the one held lit for hours, so it is the
@@ -3340,6 +3403,7 @@ void render() {
   //
   // The cycle keeps turning either way, so coming back to the game page does
   // not find it parked where you left it.
+  pageAnnounce();
   burnService();
   bool burnHere = (page == P_GAME && gameFresh());
   frameShift(burnHere ? burnX : 0, burnHere ? burnY : 0);
@@ -3824,6 +3888,10 @@ void printHelp() {
   Serial.println(F("    %rs=0|1      rev counter: 0 a bar, 1 a needle"));
   Serial.println(F("    %ic=100|400|1000  I2C kHz. No vsync exists on these"));
   Serial.println(F("    modules; a faster bus is what shortens the tear."));
+  Serial.println(F("    %cv=<base64>  one whole 512-byte frame for CUSTOM."));
+  Serial.println(F("    The board says '!PAGE n' when the page changes, so the"));
+  Serial.println(F("    app knows when to send them."));
+  Serial.println(F("    %gp=3        show that page now (the app's preview)"));
   Serial.println(F("    %pg=1,2,0,3  the rotation, in order, by page number."));
   Serial.println(F("    Left out = not in it. The report shows it as ORD=."));
   Serial.println(F("    on the MUSIC page - and on the last GAME sub-page - the"));
@@ -3847,8 +3915,13 @@ void handleSerial() {
   // A 250 px strip is 336 base64 characters plus 13 of header - 349, which fit
   // in 352 only by luck. One more field on that line and it would have been cut
   // in silence, and a cut base64 string draws garbage.
-  static char aBuf[420];
-  static uint8_t aLen = 0;
+  // A whole frame is 512 bytes, which is 684 characters of base64 plus its key.
+  static char aBuf[768];
+  // uint16_t, and it matters: this index was uint8_t while the buffer grew from
+  // 80 bytes to 768. A whole frame for the custom page is 688 characters, so it
+  // wrapped at 255 and the line arrived shredded - and the shorter lines had
+  // been getting away with it purely by being under the limit.
+  static uint16_t aLen = 0;
   static bool aCap = false;
 
   while (Serial.available()) {

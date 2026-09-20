@@ -35,6 +35,7 @@ from telemetry.sources import ALL
 
 import audio
 import autostart
+import editor
 import settings
 
 try:
@@ -53,8 +54,9 @@ STALE_S = 2.0
 # The board's pages, in the order of its own enum - the app talks about them
 # by number, so this list IS the protocol. It had fallen behind: MUSIC was
 # added to the board and not here, so every label after it was one out.
-PAGE_NAMES = ["PANEL", "GAME", "MUSIC", "HID", "SWITCHES", "ENCODER",
-              "BUTTONS", "PCF8574", "I2C", "INFO"]
+PAGE_NAMES = ["PANEL", "GAME", "MUSIC", "CUSTOM", "HID", "SWITCHES",
+              "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO"]
+P_CUSTOM = 3
 PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
 # The mirrored screen, drawn this many times larger than the real 128x32 panel.
@@ -126,6 +128,10 @@ class Link:
 
     def __init__(self, q, on_audio=None):
         self.q = q
+        # Which page the board is showing. Kept here rather than posted through
+        # the queue because the sender thread reads it, and the queue is drained
+        # by the window - which runs four times a second when it is in the tray.
+        self.board_page = -1
         # Called straight from the reader thread for '!AUD' lines. It only
         # enqueues, so the reader is never held up by COM calls.
         self.on_audio = on_audio
@@ -213,6 +219,12 @@ class Link:
                         self.q.put(("fb", (int(w), int(h),
                                            base64.b64decode(b64))))
                     except (ValueError, base64.binascii.Error):
+                        pass
+                    continue
+                if line.startswith("!PAGE "):
+                    try:
+                        self.board_page = int(line.split()[1])
+                    except (ValueError, IndexError):
                         pass
                     continue
                 if line.startswith("!AUD "):
@@ -481,6 +493,9 @@ class App(tk.Tk):
 
         self._build_settings()
 
+        self.editor = editor.Editor(self.tabs, self)
+        self.tabs.add(self.editor, text="Widgets")
+
         logf = ttk.LabelFrame(self, text="Log")
         logf.pack(fill="both", expand=True, **pad)
         self.log = tk.Text(logf, height=10, wrap="none", state="disabled",
@@ -563,9 +578,11 @@ class App(tk.Tk):
         rot = ttk.LabelFrame(page, text="Pages on the panel")
         rot.pack(side="left", fill="y", **pad)
         ttk.Label(rot, wraplength=300, justify="left",
-                  text="USER walks this list, in this order. A page you never "
-                       "look at is not worth three presses to get past, so take "
-                       "it out.").pack(padx=8, pady=(6, 2), anchor="w")
+                  text="USER walks this list, in this order. Drag a row to move "
+                       "it; clicking one also shows it on the panel, so the "
+                       "preview is the real screen. A page you never look at is "
+                       "not worth three presses to get past, so take it out."
+                  ).pack(padx=8, pady=(6, 2), anchor="w")
 
         cols = ttk.Frame(rot)
         cols.pack(fill="both", expand=True, padx=8, pady=6)
@@ -575,6 +592,12 @@ class App(tk.Tk):
         ttk.Label(shown, text="In the rotation").pack(anchor="w")
         self.pg_in = tk.Listbox(shown, height=11, width=16, exportselection=False)
         self.pg_in.pack()
+        # Drag a row to move it. The buttons beside it still work - they are
+        # better for one step at a time - but picking a page up and putting it
+        # where you want it is what you actually mean by "in this order".
+        self.pg_in.bind("<Button-1>", self._pg_grab)
+        self.pg_in.bind("<B1-Motion>", self._pg_drag)
+        self.pg_in.bind("<ButtonRelease-1>", self._pg_drop)
 
         mid = ttk.Frame(cols)
         mid.pack(side="left", fill="y", padx=6)
@@ -664,6 +687,36 @@ class App(tk.Tk):
         settings.save(self.cfg)
         if order:
             self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
+
+    # ---- dragging a row --------------------------------------------------
+    def _pg_grab(self, ev):
+        self._pg_from = self.pg_in.nearest(ev.y)
+        # Clicking a page also shows it on the panel. That is the preview: the
+        # real screen, which cannot drift from what the firmware draws.
+        order, _rest = self._pg_ids
+        if 0 <= self._pg_from < len(order):
+            self.link.send("%%gp=%d" % order[self._pg_from], echo=False)
+
+    def _pg_drag(self, ev):
+        order, _rest = self._pg_ids
+        i = getattr(self, "_pg_from", None)
+        if i is None:
+            return
+        j = max(0, min(len(order) - 1, self.pg_in.nearest(ev.y)))
+        if j == i:
+            return
+        order.insert(j, order.pop(i))
+        self._pg_from = j
+        self.pg_in.delete(0, "end")
+        for k in order:
+            self.pg_in.insert("end", PAGE_NAMES[k])
+        self.pg_in.selection_clear(0, "end")
+        self.pg_in.selection_set(j)
+
+    def _pg_drop(self, _ev):
+        if getattr(self, "_pg_from", None) is not None:
+            self._pg_apply()
+        self._pg_from = None
 
     def _pg_move(self, by):
         sel = self.pg_in.curselection()
@@ -757,6 +810,29 @@ class App(tk.Tk):
         self.audio.mixer.set_use_inapp(on)
         self._log("volume: %s" % ("the app's own slider where it has one" if on
                                   else "the Windows mixer channel only"), "info")
+
+    def save_cfg(self):
+        settings.save(self.cfg)
+
+    def widget_data(self):
+        """One flat dict of everything a widget can be pointed at.
+
+        Telemetry and what's playing come from different places and are shaped
+        differently; the widgets should not have to know that.
+        """
+        d = {}
+        t = self.hub.best()
+        if t is not None:
+            for k in ("speed_kmh", "rpm", "rpm_max", "redline", "gear",
+                      "fuel_pct", "throttle", "brake", "turbo_bar", "engine_c",
+                      "kts", "vspeed_fpm", "alt_ft", "hdg", "gforce", "aoa",
+                      "src", "text"):
+                d[k] = getattr(t, k, None)
+        snap = self.audio.now.snapshot() if getattr(self.audio, "now", None) else None
+        if snap:
+            d["np_title"] = snap.get("title")
+            d["np_artist"] = snap.get("artist")
+        return d
 
     def _remember_audio_target(self, label):
         """Called from the audio thread when you pick a different app.
@@ -947,13 +1023,30 @@ class App(tk.Tk):
 
     def _send_loop(self):
         """The only place that sends telemetry. Its own rate, independent of how
-        often the window redraws."""
+        often the window redraws - which matters here, because the window runs
+        at four hertz while it sits in the tray and the panel would crawl."""
         period = 1.0 / SEND_HZ
+        next_page = 0.0
+        page_period = 1.0 / editor.SEND_HZ
         while not self._stop_send.is_set():
             tel = self.hub.best()
             if tel is not None and self.link.open:
                 if self.link.send(tel.to_line(), echo=False):
                     self.hub.sent += 1
+
+            # The custom page, but only while the board is actually showing it.
+            now = time.time()
+            if (self.link.open and self.link.board_page == P_CUSTOM
+                    and now >= next_page):
+                next_page = now + page_period
+                try:
+                    frame = self.editor.frame_bytes()
+                    if frame:
+                        self.link.send("%%cv=%s" % base64.b64encode(frame).decode(),
+                                       echo=False)
+                except Exception:
+                    pass                # a bad layout must not stop telemetry
+
             self._stop_send.wait(period)
 
     def _push_game(self):

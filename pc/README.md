@@ -361,6 +361,38 @@ board:
 the default: if yours dislikes it the screen fills with rubbish and you come
 back here and set it down.
 
+## The Widgets tab: a page you lay out yourself
+
+The board has a 5x7 font and about eight shapes. The PC has every font Windows
+ships and a drawing library - so the widgets live there, and what crosses the
+wire is the finished picture: 512 bytes in the exact layout of the panel's own
+memory, which makes the board's side of it a `memcpy`.
+
+Drag from the palette onto the canvas. The preview is not a drawing of what the
+panel will show, it IS what the panel will show - `widgets.render` produces the
+image in the editor and the bytes that go down the wire, so the two cannot
+disagree. Checked by rendering a page here, sending it, reading the panel back
+through the mirror and comparing: identical, byte for byte.
+
+| Widget | |
+|---|---|
+| Number | a field, with an optional caption above it |
+| Text | a label, or a text field like the source or the track |
+| Bar / Column | a fill, horizontal or vertical |
+| Needle | a dial, ticks rather than an arc |
+| Lamp | filled when the field is non-zero, outlined when it isn't |
+| Frame / Line | for dividing things up |
+
+Adding one is a function and a line in `PALETTE`; nothing else in the program
+has to hear about it. The screen is 128x32, though, and that is the real
+constraint - three or four things fit, and a "gigantic library" would mostly be
+widgets with nowhere to go.
+
+Frames are sent only while the board is showing that page. It says so itself:
+`!PAGE n` whenever the page changes. Guessing from the status line would not
+work - that only goes out when reporting is switched on - and streaming ten
+kilobytes a second at a page nobody is looking at would be silly.
+
 ## Looking after the screen
 
 An OLED wears out the pixels that are lit, and this panel draws the same header
