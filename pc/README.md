@@ -31,6 +31,23 @@ Needs `pyserial`. If it's missing: `pip install pyserial`. `pywin32` and
 **Close the Arduino IDE's Serial Monitor first.** The port is exclusive: while
 the IDE holds it, this app can't open it (and arduino-cli can't flash either).
 
+## The look
+
+One palette, in `theme.py`, for the whole window. The page list was dark with
+cards and a warm accent while everything around it was whatever ttk does by
+default on Windows, which is grey - and two designs in one window is worse than
+either. The ttk theme is `clam`, because it is the only one that lets you colour
+borders and troughs; vista and xpnative draw themselves from Windows and ignore
+most of what you tell them.
+
+Tk's own widgets - the log, the alarm list, every canvas - take no theme at all,
+so they are handed the same colours by name. That is why there is a palette dict
+rather than colours scattered through five files.
+
+**Export settings** and **Import** are next to the options: the whole file -
+pages, order, layouts, names, alarms - somewhere you can find it. Import asks
+first and then restarts the app, because half of it is read at startup.
+
 ## What you see
 
 - lamps for the eight expander buttons (A1..A4, B1..B4) and for the d-pad
