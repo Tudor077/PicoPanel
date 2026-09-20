@@ -7,6 +7,15 @@ Both directions travel over the same serial link:
 | Pico -> PC | telemetry, ~5 times a second: buttons, switches, encoder, page, HID state, OLED state, plus the screen's frame buffer while the mirror is on |
 | PC -> Pico | game telemetry at 60 Hz, the audio target and what's playing twice a second, plus console commands from the buttons or typed by hand |
 
+## One copy at a time
+
+The serial port is exclusive, so a second copy can do nothing but sit there
+failing to open it - which is exactly what it did, printing "access is denied"
+in a log that gave no hint the cause was another PicoPanel rather than a broken
+cable. Starting it again now raises the copy that is already running. A named
+mutex, held by the kernel, so a crash cannot leave it behind the way a lock file
+can.
+
 ## Starting it
 
 ```
@@ -332,7 +341,14 @@ lives here. They were mixed together in one column of buttons, which is fine for
 five things and useless for twelve.
 
 **Pages on the panel.** USER walks a LIST, not a count, and this is the list:
-drag pages up and down, or move them out of the rotation entirely. A page you
+drag rows to reorder them, or move them out of the rotation entirely. Clicking
+a row shows that page on the panel and in the preview beside the list - which is
+the board's own mirror, not a drawing of it. A mock-up would be a second picture
+of every page, and the moment the firmware changed one it would start lying.
+
+Arrangements can be named and kept: **Preset** saves the list you have, and
+brings it back later. They live in the app's settings, not on the board - the
+board only ever hears the one list currently in force. A page you
 never look at is not worth three presses to get past. The board keeps it in RAM
 and forgets it when unplugged, so the app sends it again on every connect -
 which beats wearing out flash for something re-sent in fifty milliseconds.
@@ -382,6 +398,11 @@ through the mirror and comparing: identical, byte for byte.
 | Needle | a dial, ticks rather than an arc |
 | Lamp | filled when the field is non-zero, outlined when it isn't |
 | Frame / Line | for dividing things up |
+
+Each one in the palette shows a picture of ITSELF, drawn by the widget's own
+code with made-up numbers - a bar half full, a needle pointing somewhere. Not a
+hand-drawn glyph: an icon drawn separately can come to mean something the widget
+no longer does, and this way a new widget gets an icon for free.
 
 Adding one is a function and a line in `PALETTE`; nothing else in the program
 has to hear about it. The screen is 128x32, though, and that is the real

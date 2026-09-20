@@ -49,6 +49,10 @@ DEFAULTS = {
     # The widgets you laid out for the CUSTOM page, as a list of dicts. The
     # board never sees this - it only ever gets the finished picture.
     "custom_page": None,
+
+    # Named page arrangements: {"Driving": [1, 3, 0], ...}. Yours, not the
+    # board's - it only ever hears the one list that is currently in force.
+    "page_presets": {},
 }
 
 

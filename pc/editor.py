@@ -26,15 +26,38 @@ CW, CH = WG.W * ZOOM, WG.H * ZOOM
 SEND_HZ = 15
 
 
-def _photo(img):
+def _photo(img, size=None):
     """A PIL image as a Tk PhotoImage, without needing PIL's Tk bridge.
 
     Tk reads PPM out of a base64 blob, and PIL writes PPM. That is the whole
     trick, and it saves a dependency that is missing often enough to matter.
     """
     buf = io.BytesIO()
-    img.convert("RGB").resize((CW, CH), 0).save(buf, format="PPM")
+    img.convert("RGB").resize(size or (CW, CH), 0).save(buf, format="PPM")
     return tk.PhotoImage(data=base64.b64encode(buf.getvalue()))
+
+
+# Made-up numbers for the palette icons, so a bar is half full and a needle
+# points somewhere rather than every icon sitting at zero and looking alike.
+ICON_DATA = {"speed_kmh": 88, "rpm": 4200, "rpm_max": 7000, "fuel_pct": 62,
+             "brake": 1, "throttle": 0.6, "src": "ABC", "gear": 3}
+
+
+def _icon(kind, defaults, zoom=2):
+    """A picture of the widget itself, drawn by the widget's own code.
+
+    Not a hand-drawn glyph: this way an icon cannot come to mean something the
+    widget no longer does, and a new widget gets an icon for free.
+    """
+    w = WG.Widget(kind=kind, x=1, y=1, **defaults)
+    img = WG.Image.new("1", (w.w + 2, w.h + 2), 0)
+    d = WG.ImageDraw.Draw(img)
+    d.fontmode = "1"
+    try:
+        WG.DRAW[kind](d, w, ICON_DATA)
+    except Exception:
+        pass
+    return _photo(img, (img.width * zoom, img.height * zoom))
 
 
 class Editor(ttk.Frame):
@@ -54,10 +77,18 @@ class Editor(ttk.Frame):
         pal = ttk.Frame(self)
         pal.pack(fill="x", padx=8, pady=(8, 4))
         ttk.Label(pal, text="Drop one on:").pack(side="left", padx=(0, 6))
+        # Kept on the instance: a PhotoImage that nothing references is
+        # collected, and the button then shows an empty square.
+        self._icons = []
         for kind, label, defaults in WG.PALETTE:
-            ttk.Button(pal, text=label, width=9,
+            try:
+                img = _icon(kind, defaults)
+                self._icons.append(img)
+            except Exception:
+                img = None
+            ttk.Button(pal, text=label, image=img, compound="top",
                        command=lambda k=kind, d=defaults: self._add(k, d)
-                       ).pack(side="left", padx=2)
+                       ).pack(side="left", padx=3)
         ttk.Button(pal, text="Delete", width=8,
                    command=self._delete).pack(side="right", padx=2)
 

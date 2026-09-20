@@ -37,6 +37,7 @@ import audio
 import autostart
 import editor
 import settings
+import single
 
 try:
     from tray import Tray
@@ -57,6 +58,11 @@ STALE_S = 2.0
 PAGE_NAMES = ["PANEL", "GAME", "MUSIC", "CUSTOM", "HID", "SWITCHES",
               "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO"]
 P_CUSTOM = 3
+
+# The preview beside the page list. Smaller than the big mirror on the Panel
+# tab - it is there to tell you which page you are looking at, not to read.
+PREVIEW_SCALE = 2
+WG_W, WG_H = 128, 32
 PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
 # The mirrored screen, drawn this many times larger than the real 128x32 panel.
@@ -495,6 +501,7 @@ class App(tk.Tk):
 
         self.editor = editor.Editor(self.tabs, self)
         self.tabs.add(self.editor, text="Widgets")
+        self.tabs.bind("<<NotebookTabChanged>>", self._preview_follow)
 
         logf = ttk.LabelFrame(self, text="Log")
         logf.pack(fill="both", expand=True, **pad)
@@ -614,6 +621,29 @@ class App(tk.Tk):
         self.pg_out = tk.Listbox(hidden, height=11, width=16, exportselection=False)
         self.pg_out.pack()
 
+        prev = ttk.Frame(rot)
+        prev.pack(fill="x", padx=8, pady=(0, 6))
+        ttk.Label(prev, text="What the panel is showing").pack(anchor="w")
+        self.pg_prev = tk.Canvas(prev, width=WG_W * PREVIEW_SCALE,
+                                 height=WG_H * PREVIEW_SCALE, bg="#0a0c0e",
+                                 highlightthickness=1,
+                                 highlightbackground="#555")
+        self.pg_prev.pack(anchor="w", pady=2)
+
+        pre = ttk.Frame(rot)
+        pre.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Label(pre, text="Preset").pack(side="left")
+        self.preset_var = tk.StringVar()
+        self.preset_box = ttk.Combobox(pre, textvariable=self.preset_var,
+                                       width=14, state="readonly")
+        self.preset_box.pack(side="left", padx=4)
+        self.preset_box.bind("<<ComboboxSelected>>", self._preset_load)
+        ttk.Button(pre, text="Save", width=6,
+                   command=self._preset_save).pack(side="left", padx=2)
+        ttk.Button(pre, text="Delete", width=7,
+                   command=self._preset_del).pack(side="left", padx=2)
+        self._preset_refresh()
+
         # ---- the screen
         scr = ttk.LabelFrame(page, text="Screen")
         scr.pack(side="left", fill="both", expand=True, **pad)
@@ -687,6 +717,48 @@ class App(tk.Tk):
         settings.save(self.cfg)
         if order:
             self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
+
+    # ---- presets ---------------------------------------------------------
+    def _presets(self):
+        p = self.cfg.get("page_presets")
+        return p if isinstance(p, dict) else {}
+
+    def _preset_refresh(self):
+        names = sorted(self._presets())
+        self.preset_box["values"] = names
+        if self.preset_var.get() not in names:
+            self.preset_var.set("")
+
+    def _preset_load(self, _ev=None):
+        order = self._presets().get(self.preset_var.get())
+        if not order:
+            return
+        order = [i for i in order if 0 <= i < len(PAGE_NAMES)]
+        rest = [i for i in range(len(PAGE_NAMES)) if i not in order]
+        self._pg_ids = (order, rest)
+        self._pg_refill()
+
+    def _preset_save(self):
+        from tkinter import simpledialog
+        name = simpledialog.askstring("Preset", "Call this arrangement what?",
+                                      parent=self)
+        if not name:
+            return
+        p = dict(self._presets())
+        p[name.strip()] = list(self._pg_ids[0])
+        self.cfg["page_presets"] = p
+        settings.save(self.cfg)
+        self._preset_refresh()
+        self.preset_var.set(name.strip())
+
+    def _preset_del(self):
+        name = self.preset_var.get()
+        p = dict(self._presets())
+        if name in p:
+            del p[name]
+            self.cfg["page_presets"] = p
+            settings.save(self.cfg)
+            self._preset_refresh()
 
     # ---- dragging a row --------------------------------------------------
     def _pg_grab(self, ev):
@@ -1109,11 +1181,50 @@ class App(tk.Tk):
         self.mirror_canvas.create_image(0, 0, image=img, anchor="nw")
         self._fb_img = img           # keep it alive, or Tk shows nothing
 
+        # The Settings tab shows the same frame, smaller: the preview beside the
+        # page list is the real panel, not a drawing of it.
+        self._paint_preview(w, h, rows)
+
         if not self.mirror_var.get():
             # Frames arrived without us asking - the board was already mirroring
             # (someone typed 'o' on it). Follow what's actually happening.
             self.mirror_var.set(True)
         self.mirror_lbl.configure(text=f"{w}x{h} live", foreground="#0a6")
+
+    def _paint_preview(self, w, h, rows):
+        cv = getattr(self, "pg_prev", None)
+        if cv is None:
+            return
+        img = tk.PhotoImage(width=w, height=h)
+        img.put(" ".join(rows))
+        img = img.zoom(PREVIEW_SCALE)
+        cv.configure(width=w * PREVIEW_SCALE, height=h * PREVIEW_SCALE)
+        cv.delete("all")
+        cv.create_image(0, 0, image=img, anchor="nw")
+        self._pg_prev_img = img
+
+    def _preview_follow(self, _ev=None):
+        """Turn the board's mirror on while the Settings tab is up, and put it
+        back the way it was on the way out.
+
+        The preview has to come from the board - a mock-up would be a second
+        drawing of every page, and the moment the firmware changed one it would
+        start lying."""
+        try:
+            on_settings = self.tabs.tab(self.tabs.select(), "text") == "Settings"
+        except Exception:
+            return
+        if on_settings == getattr(self, "_prev_on", False):
+            return
+        self._prev_on = on_settings
+        if on_settings:
+            self._prev_was = bool(self.mirror_var.get())
+            if not self._prev_was:
+                self.mirror_var.set(True)
+                self._toggle_mirror()
+        elif not getattr(self, "_prev_was", False):
+            self.mirror_var.set(False)
+            self._toggle_mirror()
 
     def _update_tip(self):
         if not self.tray:
@@ -1151,4 +1262,9 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
+    # The serial port is exclusive: a second copy can only sit there failing to
+    # open it. Clicking the shortcut again now raises the one that IS running.
+    if not single.claim():
+        single.wake_the_other()
+        sys.exit(0)
     App(hidden="--hidden" in sys.argv).mainloop()

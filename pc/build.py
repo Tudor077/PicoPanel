@@ -80,6 +80,7 @@ def main():
         # The widget library and its editor.
         "--hidden-import", "widgets",
         "--hidden-import", "editor",
+        "--hidden-import", "single",
         "--hidden-import", "PIL.ImageFont",
         "--hidden-import", "PIL.ImageDraw",
         # UI Automation, for an app's own volume slider. comtypes builds the
