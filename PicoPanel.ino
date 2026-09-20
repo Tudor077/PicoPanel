@@ -345,7 +345,7 @@ static Marquee marq[6];
    ten kilobytes a second at a page nobody is looking at would be silly. */
 // Above the buffers it sizes. The helper that turns a page number into a
 // slot stays down with the enum, which is what it needs.
-#define CUS_SLOTS 4
+#define CUS_SLOTS 8
 #define CUS_BYTES 512
 uint8_t  cusBuf[CUS_SLOTS][CUS_BYTES];
 uint16_t cusLen[CUS_SLOTS]  = { 0 };
@@ -593,13 +593,15 @@ volatile uint8_t  encTrig = '?';
 // ------------------------------------------------------------------ state --
 enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC,
             P_CUSTOM1, P_CUSTOM2, P_CUSTOM3, P_CUSTOM4,
+            P_CUSTOM5, P_CUSTOM6, P_CUSTOM7, P_CUSTOM8,
             P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO, P_COUNT };
 
-// Four of them, because one was not what was asked for: a custom page is a
-// page like any other and you want as many as you have ideas. Four fills the
-// rotation without filling the RAM - each is 512 bytes, the size of a frame.
+// Eight of them, because the ask was to add and delete as many as you like and
+// four is a number you hit. The cost is the only thing that stops it being
+// twenty: each slot holds a whole frame, 512 bytes, so eight is 4 KB of the
+// board's 264 KB. The app makes and unmakes them; the board just keeps them.
 static inline int8_t cusSlotOf(uint8_t pg) {
-  return (pg >= P_CUSTOM1 && pg <= P_CUSTOM4) ? (int8_t)(pg - P_CUSTOM1) : -1;
+  return (pg >= P_CUSTOM1 && pg <= P_CUSTOM8) ? (int8_t)(pg - P_CUSTOM1) : -1;
 }
 
 // MUSIC has two faces: what's playing, and the words. A page of its own was
@@ -609,7 +611,9 @@ uint8_t  musicSub = 0;      // 0 = now playing, 1 = karaoke
 #define MUSIC_SUBS 2
 
 const char *PAGE_NAME[P_COUNT] =
-  { "PANEL", "GAME", "MUSIC", "MINE 1", "MINE 2", "MINE 3", "MINE 4",
+  { "PANEL", "GAME", "MUSIC",
+    "MINE 1", "MINE 2", "MINE 3", "MINE 4",
+    "MINE 5", "MINE 6", "MINE 7", "MINE 8",
     "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO" };
 
 uint8_t  page       = P_OVERVIEW;
@@ -626,11 +630,12 @@ uint8_t  page       = P_OVERVIEW;
 // the app, and read by audParse long before the drawing code exists.
 uint8_t  rpmStyle = 0;
 
-// The extra custom pages start out of the rotation: four blank pages in
-// everyone's way would be a worse default than none.
+// The spare custom pages start out of the rotation: seven blank pages in
+// everyone's way would be a worse default than none. The app puts them in as
+// you make them.
 uint8_t  pageList[P_COUNT] = { P_OVERVIEW, P_GAME, P_MUSIC, P_CUSTOM1, P_HID,
                                P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO };
-uint8_t  pageListN = P_COUNT - 3;      // the three spare custom pages are out
+uint8_t  pageListN = P_COUNT - 7;      // the seven spare custom pages are out
 uint8_t  pageSlot  = 0;          // where we are in that list
 
 // Where a page sits in the list, or -1 if it has been left out of it.
@@ -3422,8 +3427,9 @@ void render() {
     case P_MUSIC:
       if (musicSub == 1) drawKaraoke(); else drawMusic();
       break;
-    case P_CUSTOM1: case P_CUSTOM2:
-    case P_CUSTOM3: case P_CUSTOM4:  drawCustom();   break;
+    case P_CUSTOM1: case P_CUSTOM2: case P_CUSTOM3: case P_CUSTOM4:
+    case P_CUSTOM5: case P_CUSTOM6: case P_CUSTOM7: case P_CUSTOM8:
+      drawCustom();   break;
     case P_GAME:     drawGame();     break;
   }
   // Only on the game page. That is the one held lit for hours, so it is the
@@ -3917,7 +3923,7 @@ void printHelp() {
   Serial.println(F("    %rs=0|1      rev counter: 0 a bar, 1 a needle"));
   Serial.println(F("    %ic=100|400|1000  I2C kHz. No vsync exists on these"));
   Serial.println(F("    modules; a faster bus is what shortens the tear."));
-  Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..4"));
+  Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..8"));
   Serial.println(F("    %gs=n %ms=n   which sub-page of GAME / MUSIC"));
   Serial.println(F("    The board says '!PAGE n' when the page changes, so the"));
   Serial.println(F("    app knows when to send them."));

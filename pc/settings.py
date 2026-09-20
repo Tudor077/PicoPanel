@@ -8,6 +8,12 @@ worse than one that doesn't exist.
 import json
 import os
 
+# The shape of this file. Page numbers are the board's own enum, so a change
+# there - going from four drawable pages to eight - renumbers everything after
+# them, and an order written before that would put HID where SWITCHES is.
+SCHEMA = 2
+
+
 DEFAULTS = {
     # When True we don't bind the OutGauge port (4444) and leave it to somebody
     # else - in practice to CorsaConnect, which wants it anyway. Telemetry then
@@ -46,16 +52,69 @@ DEFAULTS = {
     "rpm_style": 0,         # 0 a bar, 1 a needle
     "i2c_khz": 400,
 
-    # The widgets you laid out for the CUSTOM page, as a list of dicts. The
-    # board never sees this - it only ever gets the finished picture.
     # The widgets you laid out, one list per slot: {"0": [...], "1": [...]}.
     # The board never sees these - it only ever gets the finished picture.
     "layouts": {},
 
+    # Which of the board's eight drawable pages you have actually made. The
+    # slots all exist in the firmware; this says which ones are yours, so the
+    # list shows the pages you built and not eight empty ones.
+    "custom_pages": [0],
+
     # Named page arrangements: {"Driving": [1, 3, 0], ...}. Yours, not the
     # board's - it only ever hears the one list that is currently in force.
     "page_presets": {},
+
+    # Which shape this file is in - see _migrate below.
+    "schema": SCHEMA,
 }
+
+
+def _migrate(s, was):
+    """Bring an older settings file up to the current numbering.
+
+    `was` is the version read from the FILE, not from the merged settings: the
+    defaults carry the current version, so taking it from the merge would say
+    every old file was already up to date - which it duly did, once.
+
+    Done on load and written straight back, so it happens once. The alternative
+    is asking everyone to redo their page order, which is the sort of thing that
+    makes people stop dragging pages about.
+    """
+    try:
+        was = int(was or 1)
+    except (TypeError, ValueError):
+        was = 1
+    if was >= SCHEMA:
+        return s
+
+    FIRST, OLD_N, NEW_N = 3, 4, 8      # custom pages: where they start, how many
+    shift = NEW_N - OLD_N
+
+    def fix(pg):
+        pg = int(pg)
+        return pg + shift if pg >= FIRST + OLD_N else pg
+
+    if isinstance(s.get("page_order"), list):
+        s["page_order"] = [fix(p) for p in s["page_order"]]
+    if isinstance(s.get("page_presets"), dict):
+        s["page_presets"] = {k: [fix(p) for p in v]
+                             for k, v in s["page_presets"].items()
+                             if isinstance(v, list)}
+
+    # Which of your own pages existed before there was a word for it: the ones
+    # in the rotation, and any you had drawn on. Not the empty spares - those
+    # were only ever there because the firmware had four of them.
+    have = {i for i in range(OLD_N)
+            if (s.get("layouts") or {}).get(str(i))}
+    for p in (s.get("page_order") or []):
+        if FIRST <= p < FIRST + OLD_N:
+            have.add(p - FIRST)
+    s["custom_pages"] = sorted(have) or [0]
+
+    s["schema"] = SCHEMA
+    save(s)
+    return s
 
 
 def _path():
@@ -66,13 +125,16 @@ def _path():
 
 
 def load():
-    s = dict(DEFAULTS)
     try:
         with open(_path(), encoding="utf-8") as f:
-            s.update(json.load(f))
+            stored = json.load(f)
     except (OSError, json.JSONDecodeError):
-        pass            # missing or broken: fall back to the defaults
-    return s
+        stored = None   # missing or broken: fall back to the defaults
+    s = dict(DEFAULTS)
+    if not isinstance(stored, dict):
+        return s
+    s.update(stored)
+    return _migrate(s, stored.get("schema"))
 
 
 def save(s):

@@ -356,12 +356,16 @@ Arrangements can be named and kept: **Preset** saves the list you have, and
 brings it back later. They live in the app's settings, not on the board - the
 board only ever hears the one list currently in force.
 
-### Four pages of your own
+### Pages of your own, as many as you make
 
-`MINE 1` to `MINE 4`, and they are pages like any other: they sit in the
-rotation, they can be dragged about, they can be left out. Three of them start
-outside it, because four blank pages in everyone's way is a worse default than
-none.
+**+ New page** makes one and opens its editor; the **+** on a card makes one
+right below that card, where you were looking. **✕** throws one away, and asks
+first if there is anything on it. They are pages like any other: they sit in the
+rotation, they can be dragged about, they can be left out.
+
+Eight is where it stops, because each one is a whole 512-byte frame of the
+board's RAM. Only the ones you have made appear in the list - an empty `MINE 6`
+nobody asked for is clutter, not a feature.
 
 Each has its own layout, kept by the app. The board is sent the finished picture
 for whichever one it is showing - the page works with every editor window
@@ -404,7 +408,9 @@ memory, which makes the board's side of it a `memcpy`.
 The shelf runs down the side, one picture per widget. Pick one up and it follows
 the pointer - a small borderless window with the icon in it - and drops where
 you let go. Tk has no drag and drop of its own, and a ghost you can see is the
-difference between dragging and clicking and hoping. The preview is not a drawing of what the
+difference between dragging and clicking and hoping. A plain click, with no
+drag at all, drops the widget in the middle of the page - one way that cannot
+miss. The preview is not a drawing of what the
 panel will show, it IS what the panel will show - `widgets.render` produces the
 image in the editor and the bytes that go down the wire, so the two cannot
 disagree. Checked by rendering a page here, sending it, reading the panel back

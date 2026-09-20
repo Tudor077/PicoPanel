@@ -57,12 +57,16 @@ STALE_S = 2.0
 # The board's pages, in the order of its own enum - the app talks about them
 # by number, so this list IS the protocol. It had fallen behind: MUSIC was
 # added to the board and not here, so every label after it was one out.
-PAGE_NAMES = ["PANEL", "GAME", "MUSIC", "MINE 1", "MINE 2", "MINE 3", "MINE 4",
+PAGE_NAMES = ["PANEL", "GAME", "MUSIC",
+              "MINE 1", "MINE 2", "MINE 3", "MINE 4",
+              "MINE 5", "MINE 6", "MINE 7", "MINE 8",
               "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO"]
-# The board keeps four pages that the PC draws. They are pages like any other -
-# they sit in the rotation, they can be dragged about, and three of them start
-# outside it because four blank pages in everyone's way is a worse default.
-CUSTOM_FIRST, CUSTOM_N = 3, 4
+# The board keeps eight pages that the PC draws. They are pages like any other -
+# they sit in the rotation and they can be dragged about - and which of them
+# EXIST is up to you: the app makes one on a button and unmakes it on another,
+# and only the ones you have made appear in the list. Eight is where it stops
+# because each one is a whole frame of the board's RAM.
+CUSTOM_FIRST, CUSTOM_N = 3, 8
 
 PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
@@ -321,8 +325,11 @@ class App(tk.Tk):
             self.icon_path = _ico               # the editor window wants it too
         except Exception:
             pass                                # an icon is never worth a crash
-        self.geometry("880x660")
-        self.minsize(760, 560)
+        # Wide enough for a page card: the picture alone is 256 pixels, and
+        # the whole point of the list is that you see the pages rather than
+        # read their names.
+        self.geometry("1000x700")
+        self.minsize(900, 600)
 
         self.cfg = settings.load()
         self.q = queue.Queue()
@@ -585,7 +592,7 @@ class App(tk.Tk):
 
         # ---- the rotation
         rot = ttk.LabelFrame(page, text="Pages on the panel")
-        rot.pack(side="left", fill="both", expand=True, **pad)
+        rot.pack(side="left", fill="both", **pad)
 
 
         self.pg_cards = pagelist.PageList(rot, self)
@@ -605,9 +612,13 @@ class App(tk.Tk):
                    command=self._preset_del).pack(side="left", padx=2)
         self._preset_refresh()
 
-        # ---- the screen
-        scr = ttk.LabelFrame(page, text="Screen")
-        scr.pack(side="left", fill="both", expand=True, **pad)
+        # ---- everything else, stacked down the right-hand side. Side by
+        # side, the third panel fell off the edge of the window.
+        rest = ttk.Frame(page)
+        rest.pack(side="left", fill="both", expand=True, **pad)
+
+        scr = ttk.LabelFrame(rest, text="Screen")
+        scr.pack(fill="x")
 
         ttk.Label(scr, text="Rev counter").pack(anchor="w", padx=8, pady=(6, 0))
         self.rpm_var = tk.IntVar(value=int(self.cfg.get("rpm_style", 0)))
@@ -635,8 +646,8 @@ class App(tk.Tk):
                                                                      padx=(0, 10))
 
         # ---- the rest
-        opt = ttk.LabelFrame(page, text="Options")
-        opt.pack(side="left", fill="y", **pad)
+        opt = ttk.LabelFrame(rest, text="Options")
+        opt.pack(fill="x", pady=(10, 0))
         self.auto_var = tk.BooleanVar(value=autostart.is_enabled())
         ttk.Checkbutton(opt, text="Start at logon", variable=self.auto_var,
                         command=self._toggle_autostart).pack(anchor="w", padx=8, pady=3)
@@ -665,9 +676,85 @@ class App(tk.Tk):
         return PAGE_NAMES[pg] if 0 <= pg < len(PAGE_NAMES) else "?"
 
     def slot_of(self, pg):
-        """Which of the four pages you draw yourself, or None."""
+        """Which of the pages you draw yourself this is, or None."""
         i = pg - CUSTOM_FIRST
         return i if 0 <= i < CUSTOM_N else None
+
+    def custom_slots(self):
+        """The ones you have actually made. A missing setting means the one
+        page the board starts with, so an old config opens looking the same."""
+        v = self.cfg.get("custom_pages")
+        if not isinstance(v, list):
+            return [0]
+        out = set()
+        for i in v:
+            try:
+                i = int(i)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= i < CUSTOM_N:
+                out.add(i)
+        return sorted(out)
+
+    def page_exists(self, pg):
+        """A board page always exists; one of yours only if you made it."""
+        slot = self.slot_of(pg)
+        return True if slot is None else slot in self.custom_slots()
+
+    def pg_new(self, after=None):
+        """Another page of your own, right after that one, and lay it out now.
+
+        The editor opens by itself: a page you have just made and cannot see is
+        a page you made by accident.
+        """
+        have = self.custom_slots()
+        free = next((i for i in range(CUSTOM_N) if i not in have), None)
+        if free is None:
+            self._log("that is all eight - delete one to make another", "err")
+            return
+        self.cfg["custom_pages"] = have + [free]
+        settings.save(self.cfg)
+        pg = CUSTOM_FIRST + free
+        order, rest = self._pg_ids
+        if pg in rest:
+            rest.remove(pg)
+        if pg not in order:
+            at = order.index(after) + 1 if after in order else len(order)
+            order.insert(at, pg)
+        self.pg_cards.refill()
+        self.pg_apply()
+        self.pg_open(pg)
+
+    def pg_delete(self, pg):
+        """Throw a page of yours away, and its layout with it."""
+        slot = self.slot_of(pg)
+        if slot is None:
+            return                # the board's own pages are not ours to delete
+        if self.layout_of(slot):
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                    "Delete the page?",
+                    "%s has %d widget%s on it. Delete it?"
+                    % (self.page_name(pg), len(self.layout_of(slot)),
+                       "" if len(self.layout_of(slot)) == 1 else "s"),
+                    parent=self):
+                return
+        win = getattr(self, "_edit_wins", {}).pop(slot, None)
+        if win is not None and win.winfo_exists():
+            win.destroy()
+        self.cfg["custom_pages"] = [i for i in self.custom_slots() if i != slot]
+        lay = dict(self.cfg.get("layouts") or {})
+        lay.pop(str(slot), None)
+        self.cfg["layouts"] = lay
+        settings.save(self.cfg)
+        order, rest = self._pg_ids
+        if pg in order:
+            order.remove(pg)
+        if pg in rest:
+            rest.remove(pg)
+        self.pg_cards.shots.pop(pg, None)
+        self.pg_cards.refill()
+        self.pg_apply()
 
     def layout_of(self, slot):
         return list((self.cfg.get("layouts") or {}).get(str(slot)) or [])
@@ -716,11 +803,11 @@ class App(tk.Tk):
         self._pg_apply()
 
     def _pg_load(self):
+        live = [i for i in range(len(PAGE_NAMES)) if self.page_exists(i)]
         order = list(self.cfg.get("page_order") or
-                     [i for i in range(len(PAGE_NAMES))
-                      if self.slot_of(i) in (None, 0)])
-        order = [i for i in order if 0 <= i < len(PAGE_NAMES)]
-        rest = [i for i in range(len(PAGE_NAMES)) if i not in order]
+                     [i for i in live if self.slot_of(i) in (None, 0)])
+        order = [i for i in order if i in live]
+        rest = [i for i in live if i not in order]
         self._pg_ids = (order, rest)
         self.pg_cards.refill()
 
@@ -746,10 +833,11 @@ class App(tk.Tk):
         order = self._presets().get(self.preset_var.get())
         if not order:
             return
-        order = [i for i in order if 0 <= i < len(PAGE_NAMES)]
-        rest = [i for i in range(len(PAGE_NAMES)) if i not in order]
+        live = [i for i in range(len(PAGE_NAMES)) if self.page_exists(i)]
+        order = [i for i in order if i in live]
+        rest = [i for i in live if i not in order]
         self._pg_ids = (order, rest)
-        self._pg_refill()
+        self.pg_cards.refill()
 
     def _preset_save(self):
         from tkinter import simpledialog
@@ -788,7 +876,8 @@ class App(tk.Tk):
             self.mirror_var.set(True)
             self._toggle_mirror()
         self._shot_home = self.link.board_page
-        self._shot_queue = list(range(len(PAGE_NAMES)))
+        self._shot_queue = [i for i in range(len(PAGE_NAMES))
+                            if self.page_exists(i)]
         self._shot_done = done
         self.after(250, self._shot_step)
 

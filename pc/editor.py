@@ -27,12 +27,14 @@ SEND_HZ = 15
 def _photo(img, size=None):
     """A PIL image as a Tk PhotoImage, without needing PIL's Tk bridge.
 
-    Tk reads PPM out of a base64 blob, and PIL writes PPM. That is the whole
-    trick, and it saves a dependency that is missing often enough to matter.
+    PNG, not PPM. Tk reads a PPM from a FILE but not out of a base64 blob:
+    8.6.15 answers that with "couldn't recognize image data", which is how
+    every icon on the shelf and the whole preview came up blank while the
+    picture going to the panel was perfectly fine. PNG it reads either way.
     """
     buf = io.BytesIO()
-    img.convert("RGB").resize(size or (CW, CH), 0).save(buf, format="PPM")
-    return tk.PhotoImage(data=base64.b64encode(buf.getvalue()))
+    img.convert("RGB").resize(size or (CW, CH), 0).save(buf, format="PNG")
+    return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"))
 
 
 # Made-up numbers for the shelf, so a bar is half full and a needle points
@@ -70,6 +72,8 @@ class Editor(ttk.Frame):
         self._drag = None
         self._dnd = None            # (kind, defaults) while dragging off the shelf
         self._ghost = None
+        self._from = None           # where the pointer was when it was picked up
+        self._moaned = False
         self._photo_ref = None
         self._build()
         self._tick()
@@ -159,15 +163,29 @@ class Editor(ttk.Frame):
         own, and a ghost you can see is the difference between dragging and
         clicking and hoping."""
         self._dnd = (kind, defaults)
+        self._from = (ev.x_root, ev.y_root)
+        self._kill_ghost()
         try:
-            self._ghost = tk.Toplevel(self)
-            self._ghost.overrideredirect(True)
-            self._ghost.attributes("-topmost", True)
-            img = icon(kind, defaults)
+            img = icon(kind, defaults)     # before the window: if this throws,
+            win = tk.Toplevel(self)        # there is no window to leave behind
+            win.overrideredirect(True)
+            win.attributes("-topmost", True)
+            tk.Label(win, image=img, bd=0, bg="#0a0c0e").pack()
             self._ghost_img = img
-            tk.Label(self._ghost, image=img, bd=0, bg="#0a0c0e").pack()
+            self._ghost = win
             self._haul(ev)
         except Exception:
+            self._kill_ghost()
+
+    def _kill_ghost(self):
+        """One place that gets rid of it. It used to be destroyed only on a
+        clean drop, so the one exception that could happen while picking it up
+        left a blank white window sitting in the corner of the screen."""
+        if self._ghost is not None:
+            try:
+                self._ghost.destroy()
+            except Exception:
+                pass
             self._ghost = None
 
     def _haul(self, ev):
@@ -180,9 +198,8 @@ class Editor(ttk.Frame):
 
     def _drop(self, ev):
         kind_def, self._dnd = self._dnd, None
-        if self._ghost is not None:
-            self._ghost.destroy()
-            self._ghost = None
+        start, self._from = self._from, None
+        self._kill_ghost()
         if not kind_def:
             return
         kind, defaults = kind_def
@@ -192,8 +209,11 @@ class Editor(ttk.Frame):
         cy = self.canvas.winfo_rooty()
         x = (ev.x_root - cx) // ZOOM
         y = (ev.y_root - cy) // ZOOM
-        if not (0 <= x < WG.W and 0 <= y < WG.H):
-            return                      # dropped off the screen: nothing added
+        if start and abs(ev.x_root - start[0]) < 5 and abs(ev.y_root - start[1]) < 5:
+            x, y = WG.W // 2, WG.H // 2   # a plain click puts it in the middle,
+        if not (0 <= x < WG.W and 0 <= y < WG.H):   # so there is a way that
+            return                      # cannot miss; a real drag that lands
+                                        # off the screen still adds nothing
         w = WG.Widget(kind=kind, **defaults)
         w.x = max(0, min(WG.W - 1, int(x - w.w // 2)))
         w.y = max(0, min(WG.H - 1, int(y - w.h // 2)))
@@ -279,8 +299,16 @@ class Editor(ttk.Frame):
                         w.x * ZOOM, w.y * ZOOM,
                         (w.x + w.w) * ZOOM - 1, (w.y + w.h) * ZOOM - 1,
                         outline="#e8744f", dash=(3, 2))
-        except Exception:
-            pass                      # the editor must never take the app down
+        except Exception as e:
+            # Once, not sixty times a second - but once, because a preview that
+            # goes black and says nothing is how a broken _photo() lived here
+            # for a whole release.
+            if not self._moaned:
+                self._moaned = True
+                try:
+                    self.app._log("the preview is not drawing: %s" % e, "err")
+                except Exception:
+                    pass
         self.after(100, self._tick)
 
     # -------------------------------------------------------------- output
