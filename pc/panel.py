@@ -158,6 +158,7 @@ class Link:
         # the PC draws covers the whole screen, header included, so without
         # this its header would be the only one on the panel that never goes.
         self.board_hdr = 0
+        self.hdr_moved = 0.0        # when it last did
         # Called straight from the reader thread for '!AUD' lines. It only
         # enqueues, so the reader is never held up by COM calls.
         self.on_audio = on_audio
@@ -258,7 +259,9 @@ class Link:
                             self.board_sub = int(bits[2])
                             self.subs_seen[self.board_page] = max(1, int(bits[3]))
                         if len(bits) >= 5:
-                            self.board_hdr = int(bits[4])
+                            was, self.board_hdr = self.board_hdr, int(bits[4])
+                            if was != self.board_hdr:
+                                self.hdr_moved = time.time()
                     except (ValueError, IndexError):
                         pass
                     continue
@@ -389,6 +392,8 @@ class App(tk.Tk):
         self.last_send = 0.0
         self._fb_seq = 0        # frames arrived, so the walk can wait for new ones
         self._typing = {}       # header text that is still arriving
+        self._hdr_pos = None    # where our header bar is, in pixels
+        self._hdr_t = time.time()
         self.hold_until = 0.0   # don't reconnect before this
         self.tray = None
 
@@ -831,7 +836,7 @@ class App(tk.Tk):
         # yours slides with it and goes away when the panel goes quiet. The
         # fourth is the countdown, which does NOT go away with it: the board
         # keeps showing it on its own pages too.
-        shift, reveal = self.link.board_hdr, 1.0
+        shift, reveal = self._hdr_shift(), 1.0
         p = self._progress(slot, name, where, bool(badge))
         style = self.cfg.get("anim_style", "classic")
         if p < 1.0 and style != "none":
@@ -853,6 +858,55 @@ class App(tk.Tk):
     # pixels in about this long, and two things moving at two speeds on one
     # screen would look like two machines.
     ANIM_S = 0.25
+    # One pixel per this long, which is the board's own rate: nine pixels in a
+    # quarter of a second.
+    SLIDE_S = 0.025
+
+    def _hdr_shift(self):
+        """Where our header is, as a number we move ourselves.
+
+        Following the board's reported position directly looked like three
+        jerks: its slide takes a quarter of a second, the report comes over the
+        wire while it is already moving, and this page is drawn fifteen times a
+        second. So the board's number is a TARGET and the bar walks towards it
+        at the same one-pixel-per-25ms the board uses. Nobody sees the board's
+        own bar on this page anyway - the whole screen is ours - so what
+        matters is that ours moves smoothly.
+        """
+        now = time.time()
+        # The board's number is a STATE, not a position to copy: gone, or
+        # here. The nine pixels in between are ours to walk, in our own time.
+        # Copying its position meant copying it over a wire while it was
+        # already moving, and arriving in jerks. Nobody sees the board's own
+        # bar on this page in any case - the whole screen is ours.
+        target = 9.0 if self.link.board_hdr >= WG.HEADER_H else 0.0
+        pos, then = self._hdr_pos, self._hdr_t
+        self._hdr_t = now
+        if pos is None:
+            self._hdr_pos = target
+            return int(round(target))
+        step = (now - then) / self.SLIDE_S
+        if abs(target - pos) <= step:
+            pos = target
+        else:
+            pos += step if target > pos else -step
+        self._hdr_pos = pos
+        return int(round(pos))
+
+    def header_busy(self):
+        """Is anything up there mid-move? The sender draws faster while it is -
+        a quarter-second animation at fifteen frames a second is three of
+        them, which is not an animation, it is a stutter.
+        """
+        if time.time() - self.link.hdr_moved < 0.4:
+            return True
+        target = 9.0 if self.link.board_hdr >= WG.HEADER_H else 0.0
+        if self._hdr_pos is not None and abs(self._hdr_pos - target) > 0.01:
+            return True
+        for content, t0 in self._typing.values():
+            if time.time() - t0 < self.ANIM_S:
+                return True
+        return False
 
     def _progress(self, slot, *content):
         """0 to 1 since anything in the header last changed.
@@ -1671,8 +1725,14 @@ class App(tk.Tk):
             # editor window: the page has to work with every window closed.
             now = time.time()
             slot = self.slot_of(self.link.board_page) if self.link.open else None
-            if slot is not None and now >= next_page:
-                next_page = now + page_period
+            # Decided NOW, not when the last frame went out: the header starts
+            # moving between frames, and a rate chosen 66 ms ago would hold the
+            # next one back until the animation was half over. Fast while it
+            # moves, ordinary while it sits - a frame is 684 characters and
+            # there is no sense sending fifty a second at a still picture.
+            period_now = (1.0 / 50) if self.header_busy() else page_period
+            if slot is not None and now - next_page >= period_now:
+                next_page = now
                 try:
                     items = [WG.Widget.from_dict(d) for d in self.layout_of(slot)]
                     img = WG.render(items, self.widget_data(),

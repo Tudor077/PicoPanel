@@ -509,10 +509,18 @@ Cyrillic titles already use, so it sits beside the board's own text without
 looking like a different machine.
 
 It also *retracts* like the board's own: when the panel goes quiet the header
-slides up and away, and comes back when you touch something. The board reports
-where it has slid to as the fourth number of `!PAGE`, because a page the PC
+slides up and away, and comes back when you touch something. The board says
+which of the two it is in the fourth number of `!PAGE`, because a page the PC
 draws covers the whole screen - without that, yours would be the only header on
 the panel that never went away.
+
+The nine pixels in between are the app's to walk. Copying the board's reported
+position meant copying it over a wire while it was already moving, at fifteen
+frames a second - a quarter-second slide in three jerks. The board's number is
+taken as a state, here or gone, and the bar walks between them at the board's
+own rate, a pixel every 25 ms, with the page sent at fifty frames a second
+while it moves and fifteen while it sits. Measured: every one of the nine
+positions is drawn, both ways.
 
 **The grid is the editor's, not the panel's.** Eight pixels, because that is
 the band the display's memory is organised in and what every drawn row lines up
