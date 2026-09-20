@@ -30,6 +30,17 @@ debug-signed APK to a prerelease. Open the release on the phone, tap the
 In emulator mode every lamp, switch position and encoder button is tappable —
 tap one and the demo motion stops so you're driving it.
 
+## Your alarms, on the panel
+
+**SEND MY ALARMS** relays this phone's next alarm to the desktop app, which
+counts down to it on the panel and flashes the screen when it comes. Put the
+address the app shows (Settings -> Alarms) in the box next to the button.
+
+Android hands out the next alarm through `AlarmManager.getNextAlarmClock()`,
+which needs no permission and no notification access: what leaves the phone is
+one timestamp and the name of the app that set it. It is checked once a minute
+and only sent when it changes.
+
 ## Building it yourself
 
 Open `android/` in Android Studio and press Run, or:

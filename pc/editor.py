@@ -93,6 +93,10 @@ class Editor(ttk.Frame):
         ttk.Label(shelf, foreground="#666", wraplength=150, justify="left",
                   text="Pick one up and drop it on the screen."
                   ).pack(anchor="w", padx=6, pady=(4, 6))
+        # What it IS, in one line, when the pointer is over it. "Lamp" told
+        # nobody anything, and a name you have to guess at is a name you do
+        # not try.
+        self.about = tk.StringVar(value="")
         self._icons = []
         for kind, label, defaults in WG.PALETTE:
             row = ttk.Frame(shelf)
@@ -107,10 +111,17 @@ class Editor(ttk.Frame):
             lab.pack(side="left")
             ttk.Label(row, text=label).pack(side="left", padx=6)
             for wdg in (lab, row):
+                wdg.bind("<Enter>", lambda _e, k=kind: self.about.set(
+                    WG.ABOUT.get(k, "")))
+                wdg.bind("<Leave>", lambda _e: self.about.set(""))
                 wdg.bind("<ButtonPress-1>",
                          lambda e, k=kind, d=defaults: self._pick(k, d, e))
                 wdg.bind("<B1-Motion>", self._haul)
                 wdg.bind("<ButtonRelease-1>", self._drop)
+
+        ttk.Label(shelf, textvariable=self.about, foreground="#8a7",
+                  wraplength=150, justify="left"
+                  ).pack(anchor="w", padx=6, pady=(8, 4))
 
         right = ttk.Frame(body)
         right.pack(side="left", fill="both", expand=True, pady=8)
@@ -171,6 +182,26 @@ class Editor(ttk.Frame):
         e.pack(side="left", padx=4)
         e.bind("<KeyRelease>", lambda _e: self._edit())
 
+        # Which button, which switch. The kinds that pick one of a list do
+        # not have a field to point at - "A3" is not telemetry, it is a choice.
+        self.which_grp = ttk.Frame(row)
+        ttk.Label(self.which_grp, text="Which").pack(side="left", padx=(8, 0))
+        self.which_var = tk.StringVar()
+        self.which_box = ttk.Combobox(self.which_grp, textvariable=self.which_var,
+                                      width=18, state="readonly", values=[])
+        self.which_box.pack(side="left", padx=4)
+        self.which_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
+
+        # The clock is a field, so it needs a shape: 24h, 12h, the date.
+        self.fmt_grp = ttk.Frame(row)
+        ttk.Label(self.fmt_grp, text="Format").pack(side="left", padx=(8, 0))
+        self.fmt_var = tk.StringVar()
+        self.fmt_box = ttk.Combobox(self.fmt_grp, textvariable=self.fmt_var,
+                                    width=18, state="readonly",
+                                    values=[lbl for _k, lbl in WG.CLOCK_FMTS])
+        self.fmt_box.pack(side="left", padx=4)
+        self.fmt_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
+
         # How a bar fills: solid, or one of the board's two fades - the
         # song bar's faded track, or the rev counter's ramp.
         self.fill_grp = ttk.Frame(row)
@@ -209,10 +240,12 @@ class Editor(ttk.Frame):
 
         self.size_grp = ttk.Frame(row)
         spin(self.size_grp, "size", 6, 30)
-        self.wh_grp = ttk.Frame(row)
+        self.wh_grp = ttk.Frame(row)      # the anchor everything packs before
         self.wh_grp.pack(side="left")
-        spin(self.wh_grp, "w", 1, WG.W)
-        spin(self.wh_grp, "h", 1, WG.H)
+        self.w_grp = ttk.Frame(self.wh_grp)
+        spin(self.w_grp, "w", 1, WG.W)
+        self.h_grp = ttk.Frame(self.wh_grp)
+        spin(self.h_grp, "h", 1, WG.H)
         ttk.Button(row, text="Delete", command=self._delete).pack(side="right")
 
     def _rename(self):
@@ -287,8 +320,9 @@ class Editor(ttk.Frame):
             return                      # cannot miss; a real drag that lands
                                         # off the screen still adds nothing
         w = WG.Widget(kind=kind, **defaults)
-        w.x = max(0, min(WG.W - 1, int(x - w.w // 2)))
-        w.y = max(0, min(WG.H - 1, int(y - w.h // 2)))
+        ww, hh = self._size_of(w)
+        w.x = max(0, min(WG.W - 1, int(x - ww // 2)))
+        w.y = max(0, min(WG.H - 1, int(y - hh // 2)))
         self.items.append(w)
         self.sel = w
         self._show_props()
@@ -301,9 +335,17 @@ class Editor(ttk.Frame):
             self.sel = None
             self._save()
 
+    def _size_of(self, w):
+        """What that widget actually occupies. Text measures itself."""
+        try:
+            return WG.measure(w, dict(self.app.widget_data(), _editing=1))
+        except Exception:
+            return w.w, w.h
+
     def _hit(self, x, y):
         for w in reversed(self.items):
-            if w.x <= x < w.x + max(w.w, 4) and w.y <= y < w.y + max(w.h, 4):
+            ww, hh = self._size_of(w)
+            if w.x <= x < w.x + max(ww, 4) and w.y <= y < w.y + max(hh, 4):
                 return w
         return None
 
@@ -368,6 +410,26 @@ class Editor(ttk.Frame):
                                                 "Solid"))
         else:
             self.fill_grp.pack_forget()
+        choices = WG.CHOICES.get(w.kind)
+        if choices:
+            self.which_box["values"] = [lbl for _k, lbl in choices]
+            cur = w.opts.get("which", choices[0][0])
+            self.which_var.set(dict(choices).get(cur, choices[0][1]))
+            self.which_grp.pack(side="left", before=self.wh_grp)
+        else:
+            self.which_grp.pack_forget()
+        if w.field == "clock":
+            self.fmt_var.set(WG.CLOCK_LABEL.get(w.opts.get("fmt", "%H:%M"),
+                                                WG.CLOCK_FMTS[0][1]))
+            self.fmt_grp.pack(side="left", before=self.wh_grp)
+        else:
+            self.fmt_grp.pack_forget()
+        # w and h only where they do something. On text they did not: the box
+        # is the box the letters come out as.
+        (self.w_grp.pack(side="left") if w.kind in WG.USES_W
+         else self.w_grp.pack_forget())
+        (self.h_grp.pack(side="left") if w.kind in WG.USES_H
+         else self.h_grp.pack_forget())
         if w.kind in WG.USES_SIZE:
             self.size_grp.pack(side="left", before=self.wh_grp)
         else:
@@ -397,6 +459,15 @@ class Editor(ttk.Frame):
                 if lbl == self.fill_var.get():
                     w.opts["fill"] = key
                     break
+        for key, lbl in WG.CHOICES.get(w.kind, []):
+            if lbl == self.which_var.get():
+                w.opts["which"] = key
+                break
+        if w.field == "clock":
+            for key, lbl in WG.CLOCK_FMTS:
+                if lbl == self.fmt_var.get():
+                    w.opts["fmt"] = key
+                    break
         w.label = self.l_var.get()
         try:
             w.size = int(self.spins["size"].get())
@@ -412,7 +483,10 @@ class Editor(ttk.Frame):
     # ------------------------------------------------------------ painting
     def _tick(self):
         try:
-            img = WG.render(self.items, self.app.widget_data(),
+            # "_editing" is how a widget that hides itself when it has
+            # nothing to say - the alarm countdown - still shows up here,
+            # where you have to be able to see it to place it.
+            img = WG.render(self.items, dict(self.app.widget_data(), _editing=1),
                             header=self._head())
             if img is not None:
                 self._photo_ref = _photo(img)
@@ -421,9 +495,12 @@ class Editor(ttk.Frame):
                 self._grid()
                 if self.sel:
                     w = self.sel
+                    ww, hh = self._size_of(w)
+                    if w.kind in WG.AUTO_SIZE:
+                        w.w, w.h = ww, hh      # keep the stored box honest
                     self.canvas.create_rectangle(
                         w.x * ZOOM, w.y * ZOOM,
-                        (w.x + w.w) * ZOOM - 1, (w.y + w.h) * ZOOM - 1,
+                        (w.x + ww) * ZOOM - 1, (w.y + hh) * ZOOM - 1,
                         outline="#e8744f", dash=(3, 2))
         except Exception as e:
             # Once, not sixty times a second - but once, because a preview that

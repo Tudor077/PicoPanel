@@ -54,6 +54,7 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
     private OledView oled;
     private TextView status, encValue, encMeta, logView, statPage, statHid, statGame, statFps;
     private Button modeEmu, modeUsb;
+    private AlarmRelay relay;
     private final Button[] sw1 = new Button[3], sw2 = new Button[5];
     private final View[] pcfLamps = new View[8], btnLamps = new View[7];
     private final TextView[] pcfText = new TextView[8], btnText = new TextView[7];
@@ -286,6 +287,43 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
         logScroll.setLayoutParams(lp);
         col.addView(logScroll);
 
+        // ---- the alarms on this phone, on the panel across the room.
+        // Android hands out the next one and nothing else: a timestamp and who
+        // set it. No notification access, nobody's messages.
+        col.addView(heading("Alarms - tell the desktop app"));
+        LinearLayout relayRow = new LinearLayout(this);
+        relayRow.setOrientation(LinearLayout.HORIZONTAL);
+        final EditText host = new EditText(this);
+        host.setHint("192.168.1.20:8787");
+        host.setHintTextColor(MUTED);
+        host.setTextColor(INK);
+        host.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        host.setInputType(InputType.TYPE_CLASS_TEXT
+                          | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        host.setBackground(rounded(SURFACE, LINE));
+        host.setPadding(dp(10), dp(10), dp(10), dp(10));
+        host.setText(getPreferences(MODE_PRIVATE).getString("relayHost", ""));
+        host.setLayoutParams(new LinearLayout.LayoutParams(0,
+                LayoutParams.WRAP_CONTENT, 1f));
+        relayRow.addView(host);
+        relay = new AlarmRelay(this, this::log);
+        relayRow.addView(actionButton("SEND MY ALARMS", v -> {
+            String h = host.getText().toString().trim();
+            getPreferences(MODE_PRIVATE).edit().putString("relayHost", h).apply();
+            if (relay.isRunning()) {
+                relay.stop();
+                log("alarm relay off");
+            } else {
+                relay.start(h);
+                log("alarm relay on - " + h);
+            }
+        }, 0f));
+        col.addView(relayRow);
+        col.addView(label("The app's Settings tab shows the address, next to "
+                          + "\"Take alarms from the phone\". Only the next "
+                          + "alarm's time and who set it leave this phone.",
+                          12, MUTED));
+
         col.addView(heading("Source"));
         LinearLayout modes = new LinearLayout(this);
         modes.setOrientation(LinearLayout.HORIZONTAL);
@@ -477,6 +515,11 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
             manual = true;
             log("[emulator] demo motion stopped - you're driving it now", CYAN);
         }
+    }
+
+    /** One argument, in the ordinary colour - what the alarm relay reports. */
+    private void log(String text) {
+        log(text, MUTED);
     }
 
     private void log(String text, int color) {

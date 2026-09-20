@@ -84,6 +84,8 @@ def main():
         "--hidden-import", "pagelist",
         # The joystick axes, read through winmm with ctypes.
         "--hidden-import", "sticks",
+        # The phone bridge: a small HTTP server for the phone's alarms.
+        "--hidden-import", "phone",
         "--hidden-import", "PIL.ImageFont",
         "--hidden-import", "PIL.ImageDraw",
         # UI Automation, for an app's own volume slider. comtypes builds the

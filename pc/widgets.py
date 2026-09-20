@@ -49,6 +49,14 @@ FIELDS = [
     # way, which is what makes a centring widget possible at all.
     ("joy_x", "Stick X"),           ("joy_y", "Stick Y"),
     ("joy_z", "Stick Z"),           ("joy_r", "Stick R"),
+    # What's playing, beyond the two strings: the board's own MUSIC page is
+    # built out of these, so a page of yours can be too.
+    ("np_pct", "Track position %"), ("np_pos", "Track seconds"),
+    ("np_dur", "Track length"),     ("np_playing", "Playing"),
+    # The panel itself. It reports all of this five times a second anyway.
+    ("enc", "Encoder"),             ("enc_total", "Encoder total"),
+    ("sw1", "Switch 1"),            ("sw2", "Switch 2"),
+    ("fps", "Panel FPS"),           ("hid", "HID armed"),
 ]
 FIELD_LABEL = dict(FIELDS)
 
@@ -59,13 +67,25 @@ FIELD_LABEL = dict(FIELDS)
 _TEXTY = ["src", "text", "np_title", "np_artist", "clock"]
 _NUMERIC = ["speed_kmh", "rpm", "rpm_max", "redline", "gear", "fuel_pct",
             "throttle", "brake", "turbo_bar", "engine_c", "kts", "vspeed_fpm",
-            "alt_ft", "hdg", "gforce", "aoa"]
+            "alt_ft", "hdg", "gforce", "aoa",
+            "np_pct", "np_pos", "np_dur", "np_playing",
+            "enc", "enc_total", "sw1", "sw2", "fps", "hid"]
 _AXES = ["joy_x", "joy_y", "joy_z", "joy_r"]
 # A fill or a needle needs something with a top end. "How much of it" makes no
 # sense for a heading or a vertical speed, which run in both directions and
 # have no full scale to fill towards.
 _SCALED = ["rpm", "speed_kmh", "fuel_pct", "throttle", "brake", "turbo_bar",
-           "engine_c", "kts", "alt_ft", "gforce", "aoa"]
+           "engine_c", "kts", "alt_ft", "gforce", "aoa",
+           "np_pct", "enc", "sw1", "sw2"]
+
+# Text sizes itself: its box is the box the letters come out as, so w and h
+# were numbers you could turn all day for nothing. They are not offered now.
+AUTO_SIZE = {"value", "label"}
+USES_W = {"bar", "vbar", "dial", "box", "line", "axis", "dz", "btn", "btnrow",
+          "knob", "disc", "switch"}
+# The alarm sizes itself around the bell and the time left.
+AUTO_ALARM = {"alarm"}
+USES_H = USES_W | {"lamp"}
 
 KIND_FIELDS = {
     "value": _NUMERIC + _TEXTY,       # a number, or a string, either reads
@@ -77,6 +97,12 @@ KIND_FIELDS = {
     "box":   ["none"],                # decoration: it reads nothing at all
     "line":  ["none"],
     "axis":  _AXES + ["throttle", "brake", "gforce", "aoa"],
+    "btn":    ["none"],              # which button is a choice, not a field
+    "btnrow": ["none"],
+    "knob":   ["enc", "enc_total", "fuel_pct", "np_pct", "throttle"],
+    "disc":   ["none"],
+    "switch": ["none"],
+    "alarm":  ["none"],
 }
 
 
@@ -144,10 +170,27 @@ def _num(data, key, default=0.0):
         return default
 
 
+# The clock is a field, so it needs a shape. %#I is Windows' "no leading
+# zero" - this app is Windows-only, and "01:05 PM" looks like a mistake.
+CLOCK_FMTS = [
+    ("%H:%M", "24h  13:05"),
+    ("%#I:%M %p", "12h  1:05 PM"),
+    ("%H:%M:%S", "24h  13:05:09"),
+    ("%d %b", "date  12 Mar"),
+    ("%d/%m/%Y", "date  12/03/2026"),
+    ("%a %d %b", "day   Wed 12 Mar"),
+    ("%d %b %H:%M", "both  12 Mar 13:05"),
+]
+CLOCK_LABEL = dict(CLOCK_FMTS)
+
+
 def _text_of(w, data):
     """What this widget's field reads as, already a string."""
     if w.field == "clock":
-        return time.strftime(w.opts.get("fmt", "%H:%M"))
+        try:
+            return time.strftime(w.opts.get("fmt", "%H:%M"))
+        except ValueError:
+            return time.strftime("%H:%M")   # a format Windows dislikes
     if w.field in ("src", "text", "np_title", "np_artist"):
         return str(data.get(w.field) or "")
     if w.field == "gear":
@@ -168,6 +211,8 @@ def _fraction(w, data):
         hi = {"rpm": _num(data, "rpm_max", 8000) or 8000,
               "speed_kmh": 260, "fuel_pct": 100, "throttle": 1, "brake": 1,
               "engine_c": 130, "turbo_bar": 2, "kts": 400,
+              "np_pct": 100, "enc": 100, "sw1": 3, "sw2": 5,
+              "np_pos": _num(data, "np_dur", 0) or 1,
               }.get(w.field, 100)
     v = _num(data, w.field)
     if hi <= lo:
@@ -340,6 +385,126 @@ def _d_dz(d, w, data):
     d.rectangle([px - 1, py - 1, px + 1, py + 1], fill=1, outline=1)
 
 
+# ---- the panel's own furniture, as widgets ------------------------------
+# Everything the board draws on its own pages, so a page of yours can have it
+# too. The names are the ones printed on the panel.
+PCF_NAMES = ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4"]
+PAD_NAMES = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
+
+
+def _pressed(data, which):
+    """Is that button down? The expander ones first, then the d-pad."""
+    if which in PCF_NAMES:
+        seq, i = data.get("pcf") or [], PCF_NAMES.index(which)
+    elif which in PAD_NAMES:
+        seq, i = data.get("btn") or [], PAD_NAMES.index(which)
+    else:
+        return False
+    return bool(i < len(seq) and seq[i])
+
+
+def _cell(d, x, y, cw, ch, text, on):
+    """One key: filled while it is held, outlined while it is not - which is
+    how the board draws its own button row."""
+    d.rectangle([x, y, x + cw - 1, y + ch - 1], fill=1 if on else 0, outline=1)
+    if text:
+        d.text((x + 2, y + max(0, (ch - 10) // 2)), text,
+               font=_font(9 if ch >= 11 else 8), fill=0 if on else 1)
+
+
+def _d_btn(d, w, data):
+    """One button of the panel, by name."""
+    which = w.opts.get("which", "A1")
+    _cell(d, w.x, w.y, w.w, w.h, w.label or which, _pressed(data, which))
+
+
+def _d_btnrow(d, w, data):
+    """All eight expander buttons, as the PANEL page has them."""
+    n = len(PCF_NAMES)
+    cw = max(5, (w.w - (n - 1)) // n)
+    for i, name in enumerate(PCF_NAMES):
+        _cell(d, w.x + i * (cw + 1), w.y, cw, w.h, name if cw >= 14 else "",
+              _pressed(data, name))
+
+
+def _d_knob(d, w, data):
+    """The encoder as a knob: a ring with a mark. 300 degrees of travel, like
+    a real one - a full circle has no ends and no top."""
+    import math
+    r = max(3, min(w.w, w.h) // 2 - 1)
+    cx, cy = w.x + w.w // 2, w.y + w.h // 2
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=1)
+    a = math.radians(-240 + 300 * _fraction(w, data))
+    d.line([cx + math.cos(a) * r * 0.35, cy + math.sin(a) * r * 0.35,
+            cx + math.cos(a) * r * 0.95, cy + math.sin(a) * r * 0.95], fill=1)
+    if w.label:
+        d.text((w.x + w.w + 2, cy - 5), w.label, font=_font(9), fill=1)
+
+
+def _d_disc(d, w, data):
+    """The record from the MUSIC page. The three marks are the point of it: a
+    bare circle looks identical from one frame to the next and would seem to
+    be standing still."""
+    import math
+    r = max(4, min(w.w, w.h) // 2 - 1)
+    cx, cy = w.x + w.w // 2, w.y + w.h // 2
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=1)
+    d.ellipse([cx - 1, cy - 1, cx + 1, cy + 1], fill=1)
+    turn = _num(data, "np_pos") if _num(data, "np_playing") else 0.0
+    for k in range(3):
+        a = math.radians(turn * 90 + k * 120)
+        d.line([cx + math.cos(a) * r * 0.45, cy + math.sin(a) * r * 0.45,
+                cx + math.cos(a) * (r - 1), cy + math.sin(a) * (r - 1)], fill=1)
+
+
+def _d_switch(d, w, data):
+    """A slide switch: one cell per position, the one it is in filled."""
+    which = w.opts.get("which", "sw1")
+    n = 3 if which == "sw1" else 5
+    pos = int(_num(data, which))
+    cw = max(3, (w.w - (n - 1)) // n)
+    for i in range(n):
+        _cell(d, w.x + i * (cw + 1), w.y, cw, w.h,
+              str(i + 1) if cw >= 8 else "", pos == i + 1)
+
+
+def _alarm_parts(w, data):
+    """(text, draw it at all). Nothing pending means nothing on the glass -
+    except in the editor, where a widget you cannot see is a widget you cannot
+    place."""
+    left = data.get("alarm_in")
+    if left is None:
+        if not data.get("_editing"):
+            return "", False
+        left = 3 * 3600 + 42 * 60          # a plausible something, to lay out
+    left = max(0, int(left))
+    if left >= 3600:
+        txt = "%dh%02d" % (left // 3600, (left % 3600) // 60)
+    else:
+        txt = "%d:%02d" % (left // 60, left % 60)
+    if w.opts.get("what") and data.get("alarm_text"):
+        txt += " " + str(data["alarm_text"])
+    return txt, True
+
+
+def _d_alarm(d, w, data):
+    """A bell and how long until it goes off.
+
+    The bell is drawn rather than written because the panel's font has no such
+    glyph, and six lines are cheaper than a second font.
+    """
+    txt, show = _alarm_parts(w, data)
+    if not show:
+        return
+    x, y = w.x, w.y
+    d.arc([x, y + 1, x + 6, y + 9], 180, 360, fill=1)
+    d.line([x, y + 5, x, y + 7], fill=1)
+    d.line([x + 6, y + 5, x + 6, y + 7], fill=1)
+    d.line([x - 1, y + 7, x + 7, y + 7], fill=1)
+    d.point((x + 3, y + 9), fill=1)
+    d.text((x + 10, y), txt, font=_font(w.size), fill=1)
+
+
 def _d_box(d, w, data):
     d.rectangle([w.x, w.y, w.x + w.w - 1, w.y + w.h - 1], outline=1)
 
@@ -355,6 +520,15 @@ DRAW = {
     # still names it that, and a saved page that stops drawing is not a
     # rename, it is a bug.
     "axis": _d_dz, "dz": _d_dz,
+    "btn": _d_btn, "btnrow": _d_btnrow, "knob": _d_knob, "disc": _d_disc,
+    "switch": _d_switch, "alarm": _d_alarm,
+}
+
+# Kinds that pick one of a list rather than a field - a dropdown in the editor.
+CHOICES = {
+    "btn": [(n, n) for n in PCF_NAMES + PAD_NAMES],
+    "switch": [("sw1", "Switch 1 (3 positions)"),
+               ("sw2", "Switch 2 (5 positions)")],
 }
 
 # The kinds that read two fields, so the editor knows when to offer a second.
@@ -363,7 +537,7 @@ TWO_FIELD = {"axis", "dz"}
 # Which kinds actually use the text size and the caption. A spinbox that does
 # nothing is worse than no spinbox: it invites you to turn it and then makes
 # you wonder what you broke.
-USES_SIZE = {"value", "label"}
+USES_SIZE = {"value", "label", "alarm"}
 USES_LABEL = {"value", "label", "lamp"}
 
 # What the palette shows, and what a fresh one of each looks like.
@@ -377,13 +551,41 @@ PALETTE = [
     ("box",   "Frame",      dict(w=60, h=20, field="none")),
     ("line",  "Line",       dict(w=40, h=1, field="none")),
     ("axis",  "Axis",       dict(w=30, h=30, field="joy_x", field_y="joy_y")),
+    ("btn",   "Button",     dict(w=18, h=11, field="none",
+                                 opts={"which": "A1"})),
+    ("btnrow", "Button row", dict(w=128, h=10, field="none")),
+    ("knob",  "Knob",       dict(w=22, h=22, field="enc")),
+    ("disc",  "Record",     dict(w=22, h=22, field="none")),
+    ("switch", "Switch",    dict(w=40, h=10, field="none",
+                                 opts={"which": "sw1"})),
+    ("alarm", "Alarm in",   dict(w=44, h=11, size=11, field="none")),
 ]
+
+# One line each, for the shelf. "Lamp" told nobody anything.
+ABOUT = {
+    "value": "a number, as big as you like",
+    "label": "a line of text, or a field that is text",
+    "bar": "fills left to right - speed, revs, fuel, the track",
+    "vbar": "the same, standing up",
+    "dial": "a needle over a scale of ticks",
+    "lamp": "a dot that lights while the field is not zero - brake, HID",
+    "box": "an empty frame, for grouping",
+    "line": "a rule, for dividing",
+    "axis": "two axes at once, with the deadzone marked",
+    "btn": "one button of the panel, lit while it is held",
+    "btnrow": "all eight expander buttons, as the PANEL page has them",
+    "knob": "the encoder, as a knob with a mark",
+    "disc": "the record from MUSIC, turning while something plays",
+    "switch": "a slide switch, with the position it is in filled",
+    "alarm": "how long until the next alarm - gone from the panel when there "
+             "is none, still here so you can place it",
+}
 
 
 HEADER_H = 9            # the same nine rows the board's own header uses
 
 
-def header_bar(d, text, right=""):
+def header_bar(d, text, right="", shift=0):
     """The board's header, drawn here: a white bar, black text, the name on
     the left and the counter on the right.
 
@@ -392,22 +594,51 @@ def header_bar(d, text, right=""):
     in Tahoma 9, which is what the panel's Cyrillic titles already use and sits
     beside the board's own text without looking like a different machine.
     """
+    if shift >= HEADER_H:
+        return                       # slid away entirely; nothing to draw
     f = _font(9)
-    d.rectangle([0, 0, W - 1, HEADER_H - 1], fill=1)
-    d.text((2, -1), text, font=f, fill=0)
+    d.rectangle([0, -shift, W - 1, HEADER_H - 1 - shift], fill=1)
+    d.text((2, -1 - shift), text, font=f, fill=0)
     if right:
         try:
             wpx = d.textlength(right, font=f)
         except Exception:
             wpx = 6 * len(right)
-        d.text((W - 2 - wpx, -1), right, font=f, fill=0)
+        d.text((W - 2 - wpx, -1 - shift), right, font=f, fill=0)
+
+
+def measure(w, data):
+    """How big the thing actually comes out.
+
+    Text is as wide as the text, so the box the editor picks up and outlines
+    is measured from what was drawn rather than from two numbers that changed
+    nothing.
+    """
+    if not HAVE_PIL or (w.kind not in AUTO_SIZE and w.kind not in AUTO_ALARM):
+        return w.w, w.h
+    try:
+        d = ImageDraw.Draw(Image.new("1", (1, 1)))
+        if w.kind in AUTO_ALARM:
+            txt = _alarm_parts(w, dict(data, _editing=1))[0]
+            box = d.textbbox((0, 0), txt or "0h00", font=_font(w.size))
+            return max(20, int(box[2]) + 11), max(11, int(box[3]))
+        txt = _text_of(w, data) or " "
+        box = d.textbbox((0, 0), txt, font=_font(w.size))
+        tw, th = box[2], box[3]
+        if w.kind == "value" and w.label:
+            cap = d.textbbox((0, 0), w.label, font=_font(9))
+            tw, th = max(tw, cap[2]), th + 9
+        return max(2, int(tw)), max(2, int(th))
+    except Exception:
+        return w.w, w.h
 
 
 def render(widgets, data, header=None):
     """The whole 128x32 page as a PIL image, or None without PIL.
 
-    `header` is ("NAME", "3/11") to put the board's own header bar on top, or
-    None for the whole screen. The widgets are drawn AFTER it, so a layout
+    `header` is ("NAME", "3/11", shift) to put the board's own header bar on
+    top - shift being how far it has slid away, which the board reports so
+    yours retracts with its own. None means the whole screen is yours. The widgets are drawn AFTER it, so a layout
     made before the header existed still shows rather than disappearing under
     a bar nobody has moved it out of yet.
     """
@@ -418,7 +649,8 @@ def render(widgets, data, header=None):
     d.fontmode = "1"                 # 1-bit screen: antialiasing is mud
     if header:
         try:
-            header_bar(d, header[0], header[1] if len(header) > 1 else "")
+            header_bar(d, header[0], header[1] if len(header) > 1 else "",
+                       header[2] if len(header) > 2 else 0)
         except Exception:
             pass
     for w in widgets:

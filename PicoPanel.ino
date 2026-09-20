@@ -629,6 +629,12 @@ uint8_t  page       = P_OVERVIEW;
 // The rev counter: 0 = the bar across the bottom, 1 = a needle. Set from
 // the app, and read by audParse long before the drawing code exists.
 uint8_t  rpmStyle = 0;
+/* ---- the alarm ----------------------------------------------------------
+   The app keeps the clock and the list; the board just does as it is told, on
+   any page, because an alarm you only see if you happen to be on the right
+   page is not an alarm. "%fl=8000,GET UP" - for that many milliseconds. */
+uint32_t alarmUntil = 0;
+char     alarmText[24] = "";
 
 // The spare custom pages start out of the rotation: seven blank pages in
 // everyone's way would be a worse default than none. The app puts them in as
@@ -1893,6 +1899,26 @@ void audParse(char *s) {
        to walk every page AND every sub-page while it collects thumbnails, so
        the pictures beside the list are the real screen rather than a guess at
        what each page contains. */
+    /* "%fl=8000,GET UP" - flash the screen for that long, with that text.
+       The app owns the clock and the list of alarms; the board owns the glass.
+       It wakes the panel first, because an alarm on a screen that has gone to
+       sleep is a clock ticking in a drawer. */
+    else if (!strcasecmp(key, "fl")) {
+      uint32_t ms = (uint32_t)strtoul(val, NULL, 10);
+      if (ms > 60000UL) ms = 60000UL;
+      const char *comma = strchr(val, ',');
+      alarmText[0] = 0;
+      if (comma) {
+        strncpy(alarmText, comma + 1, sizeof(alarmText) - 1);
+        alarmText[sizeof(alarmText) - 1] = 0;
+      }
+      alarmUntil = ms ? (millis() + ms) : 0;
+      oledWake();
+      Serial.print(F("[alarm] "));
+      Serial.print(ms);
+      Serial.print(F(" ms "));
+      Serial.println(alarmText);
+    }
     else if (!strcasecmp(key, "gs")) {
       uint8_t n = (uint8_t)atoi(val);
       if (n < gameSubCount()) gameSub = n;
@@ -2106,6 +2132,11 @@ static void frameShift(int8_t dx, int8_t dy) {
   }
 }
 uint32_t tLastAct  = 0;
+
+// Where the header has slid to, 0 shown to 9 gone. Written by core1 in
+// render(), read by core0 in pageAnnounce().
+volatile uint8_t hdrShiftNow = 0;
+
 
 // Core1 draws nothing until core0 says setup() is finished. Declared here
 // rather than next to setup1(), because setup() has to be able to set it.
@@ -2730,6 +2761,42 @@ void drawHid() {
 // shift = how far the bar has already slid up, 0 (fully shown) to 9 (gone).
 // The bar shrinks and the text walks off the top edge; GFX clips whatever ends
 // up above y=0, so we can just draw at negative coordinates.
+/* The alarm, over whatever is on the screen. Half a second lit, half a second
+   inverted: a flash you can catch out of the corner of your eye, which is the
+   only thing a 128x32 panel across the room can do. */
+static void alarmOverlay() {
+  if (!alarmUntil) return;
+  uint32_t now = millis();
+  if ((int32_t)(now - alarmUntil) >= 0) { alarmUntil = 0; return; }
+  bool lit = ((now / 400) & 1);
+
+  // The whole screen, not a box over the page: an alarm is not a footnote to
+  // whatever you were looking at. Whatever was drawn is thrown away.
+  oled->clearDisplay();
+  oled->setTextColor(SSD1306_WHITE);
+  oled->setTextSize(2);
+  const char *big = "ALARM";
+  oled->setCursor((SCREEN_W - 12 * (int)strlen(big)) / 2, 1);
+  oled->print(big);
+  if (alarmText[0]) {
+    oled->setTextSize(1);
+    int x = (SCREEN_W - 6 * (int)strlen(alarmText)) / 2;
+    if (x < 0) x = 0;
+    oled->setCursor(x, oledH - 9);
+    oled->print(alarmText);
+  }
+  oled->setTextSize(1);
+
+  // ...and then the whole thing flips, every 400 ms. White on black, black on
+  // white: the two states are as far apart as one bit per pixel allows, which
+  // is what makes it catch the corner of your eye from across the room.
+  if (lit) {
+    uint8_t *b = oled->getBuffer();
+    uint16_t n = (uint16_t)SCREEN_W * oledH / 8;
+    for (uint16_t i = 0; i < n; i++) b[i] = (uint8_t)~b[i];
+  }
+}
+
 void header(int shift) {
   int h = 9 - shift;
   if (h > 0) oled->fillRect(0, 0, SCREEN_W, h, SSD1306_WHITE);
@@ -3413,6 +3480,10 @@ void render() {
   uint8_t target = ((millis() - tLastAct) < OLED_RETRACT_MS) ? 0 : 9;
   if      (hdrShift < target) hdrShift++;
   else if (hdrShift > target) hdrShift--;
+  // A page the PC draws gets the whole screen, header included - so it has to
+  // be told where this one is, or its header is the only one on the panel
+  // that never goes away.
+  hdrShiftNow = hdrShift;
 
   if (hdrShift < 9) header(hdrShift);
   switch (page) {
@@ -3439,6 +3510,7 @@ void render() {
   //
   // The cycle keeps turning either way, so coming back to the game page does
   // not find it parked where you left it.
+  alarmOverlay();
   burnService();
   bool burnHere = (page == P_GAME && gameFresh());
   frameShift(burnHere ? burnX : 0, burnHere ? burnY : 0);
@@ -3925,6 +3997,7 @@ void printHelp() {
   Serial.println(F("    modules; a faster bus is what shortens the tear."));
   Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..8"));
   Serial.println(F("    %gs=n %ms=n   which sub-page of GAME / MUSIC"));
+  Serial.println(F("    %fl=<ms>,<text>  flash the screen - the app's alarms"));
   Serial.println(F("    The board says '!PAGE n sub subs' on every change, so"));
   Serial.println(F("    the app knows when to send them - and what to walk."));
   Serial.println(F("    %gp=3        show that page now (the app's preview)"));
@@ -4376,9 +4449,13 @@ static void pageAnnounce() {
   // was wrong in a way that only showed up with the app started second: the
   // board was already on the page, had already said so to nobody, and the app
   // never found out. A repeat costs eight bytes and removes the whole class.
-  if (page == said && cur == saidSub && (now - lastSaid) < 2000UL) return;
+  static uint8_t saidShift = 255;
+  uint8_t shift = hdrShiftNow;
+  if (page == said && cur == saidSub && shift == saidShift
+      && (now - lastSaid) < 2000UL) return;
   said = page;
   saidSub = cur;
+  saidShift = shift;
   lastSaid = now;
   // "!PAGE 1 2 4" - page, the sub-page showing, how many it has. The first
   // number is all the older app read, and it still is.
@@ -4387,7 +4464,9 @@ static void pageAnnounce() {
   Serial.print(' ');
   Serial.print(cur);
   Serial.print(' ');
-  Serial.println(tot);
+  Serial.print(tot);
+  Serial.print(' ');
+  Serial.println(hdrShiftNow);
 }
 
 void loop() {

@@ -37,6 +37,7 @@ import audio
 import autostart
 import editor
 import pagelist
+import phone
 import sticks
 import widgets as WG
 import settings
@@ -152,6 +153,10 @@ class Link:
         # board tells us rather than us guessing.
         self.board_sub = 0
         self.subs_seen = {}         # page -> how many sub-pages it said it has
+        # How far the board's header has slid away, 0 shown to 9 gone. A page
+        # the PC draws covers the whole screen, header included, so without
+        # this its header would be the only one on the panel that never goes.
+        self.board_hdr = 0
         # Called straight from the reader thread for '!AUD' lines. It only
         # enqueues, so the reader is never held up by COM calls.
         self.on_audio = on_audio
@@ -251,6 +256,8 @@ class Link:
                         if len(bits) >= 4:
                             self.board_sub = int(bits[2])
                             self.subs_seen[self.board_page] = max(1, int(bits[3]))
+                        if len(bits) >= 5:
+                            self.board_hdr = int(bits[4])
                     except (ValueError, IndexError):
                         pass
                     continue
@@ -366,6 +373,10 @@ class App(tk.Tk):
         # widget's two axes. Polled only when a widget asks - measured at
         # 4 microseconds for both devices on this machine.
         self.sticks = sticks.Sticks()
+        # The phone's alarms. Yours live on your phone - that is what actually
+        # wakes you - so the panel is told about them rather than asking you to
+        # type them in twice.
+        self.phone = phone.Bridge(log=lambda m, t="info": self.q.put((t, m)))
         self.link = Link(self.q, on_audio=self.audio.request)
         self.hub = Hub()
         self.hub.yield_outgauge = bool(self.cfg.get("yield_outgauge"))
@@ -690,6 +701,49 @@ class App(tk.Tk):
                         variable=self.kar_var,
                         command=self._toggle_karaoke).pack(anchor="w", padx=8, pady=3)
 
+        # ---- alarms
+        al = ttk.LabelFrame(rest, text="Alarms")
+        al.pack(fill="x", pady=(10, 0))
+        ttk.Label(al, wraplength=320, justify="left", foreground="#555",
+                  text="The screen flashes and says so, whatever page is up - "
+                       "so it is not a widget on a page you might not be "
+                       "looking at. The app keeps the time; the board owns "
+                       "the glass.").pack(anchor="w", padx=8, pady=(4, 2))
+        self.al_box = tk.Listbox(al, height=4, activestyle="none")
+        self.al_box.pack(fill="x", padx=8)
+        row = ttk.Frame(al)
+        row.pack(fill="x", padx=8, pady=4)
+        ttk.Label(row, text="at").pack(side="left")
+        self.al_time = ttk.Entry(row, width=6)
+        self.al_time.insert(0, "07:30")
+        self.al_time.pack(side="left", padx=4)
+        self.al_text = ttk.Entry(row, width=14)
+        self.al_text.insert(0, "GET UP")
+        self.al_text.pack(side="left", padx=4)
+        ttk.Button(row, text="Add", width=5,
+                   command=self._alarm_add).pack(side="left", padx=2)
+        ttk.Button(row, text="Remove", width=7,
+                   command=self._alarm_del).pack(side="left", padx=2)
+        ttk.Button(row, text="Test", width=5,
+                   command=lambda: self._alarm_fire(
+                       {"text": self.al_text.get()})).pack(side="right")
+
+        # ---- the phone
+        ph = ttk.Frame(al)
+        ph.pack(fill="x", padx=8, pady=(2, 6))
+        self.phone_var = tk.BooleanVar(value=bool(self.cfg.get("phone_bridge")))
+        ttk.Checkbutton(ph, text="Take alarms from the phone",
+                        variable=self.phone_var,
+                        command=self._toggle_phone).pack(anchor="w")
+        self.phone_lbl = ttk.Label(ph, foreground="#555", wraplength=320,
+                                   justify="left", text="")
+        self.phone_lbl.pack(anchor="w", padx=20)
+        self._alarm_refresh()
+        if self.phone_var.get():
+            self._toggle_phone()
+        self._alarm_done = {}
+        self.after(3000, self._alarm_tick)
+
         self._pg_load()
 
     # ---- the page rotation ----------------------------------------------
@@ -737,7 +791,9 @@ class App(tk.Tk):
         pg = CUSTOM_FIRST + slot
         order = self._pg_ids[0]
         where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
-        return (self.page_name(pg), where)
+        # The third number is where the board's own header has slid to, so
+        # yours slides with it and goes away when the panel goes quiet.
+        return (self.page_name(pg), where, self.link.board_hdr)
 
     def slot_of(self, pg):
         """Which of the pages you draw yourself this is, or None."""
@@ -894,6 +950,129 @@ class App(tk.Tk):
         settings.save(self.cfg)
         if order:
             self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
+
+    # ---- alarms ----------------------------------------------------------
+    def next_alarm(self):
+        """(seconds from now, what for) for the soonest alarm, or None.
+
+        Both lists at once: the ones set here, and whatever the phone last
+        said. Two sources for the same thing is the point - it is the same
+        morning either way.
+        """
+        best = None
+        now = time.localtime()
+        for a in self._alarms():
+            if not a.get("on", True):
+                continue
+            try:
+                hh, mm = [int(x) for x in str(a.get("at", "")).split(":")[:2]]
+            except ValueError:
+                continue
+            when = time.mktime((now.tm_year, now.tm_mon, now.tm_mday,
+                                hh, mm, 0, 0, 0, -1))
+            left = when - time.time()
+            if left < -60:
+                left += 86400            # it has gone today; it is tomorrow's
+            if best is None or left < best[0]:
+                best = (max(0.0, left), a.get("text", ""))
+        p = self.phone.pending()
+        if p and (best is None or p[0] < best[0]):
+            best = p
+        return best
+
+    def _alarms(self):
+        a = self.cfg.get("alarms")
+        return a if isinstance(a, list) else []
+
+    def _alarm_refresh(self):
+        self.al_box.delete(0, "end")
+        for a in self._alarms():
+            self.al_box.insert("end", "%s   %s" % (a.get("at", "??:??"),
+                                                   a.get("text", "")))
+
+    def _alarm_add(self):
+        at = (self.al_time.get() or "").strip()
+        try:
+            h, m = [int(x) for x in at.split(":")]
+            if not (0 <= h < 24 and 0 <= m < 60):
+                raise ValueError
+        except ValueError:
+            self._log("an alarm wants a time like 07:30", "err")
+            return
+        alarms = self._alarms() + [{"at": "%02d:%02d" % (h, m),
+                                    "text": self.al_text.get().strip(),
+                                    "on": True}]
+        self.cfg["alarms"] = alarms
+        settings.save(self.cfg)
+        self._alarm_refresh()
+
+    def _alarm_del(self):
+        sel = list(self.al_box.curselection())
+        if not sel:
+            return
+        alarms = [a for i, a in enumerate(self._alarms()) if i not in sel]
+        self.cfg["alarms"] = alarms
+        settings.save(self.cfg)
+        self._alarm_refresh()
+
+    def _toggle_phone(self):
+        """Listen for the phone, or stop.
+
+        Off by default: it opens a port on the network, and a program that
+        starts listening without being asked is a program you have to trust
+        more than this one deserves.
+        """
+        on = bool(self.phone_var.get())
+        self.cfg["phone_bridge"] = on
+        settings.save(self.cfg)
+        if on and self.phone.start():
+            url = "http://%s:%d" % (phone.lan_ip(), self.phone.port)
+            self.phone_lbl.configure(
+                text="Open %s on the phone - or point the Pocket app at it. It "
+                     "posts the next alarm; the panel counts down to it and "
+                     "flashes when it comes." % url)
+        elif not on:
+            self.phone.stop()
+            self.phone_lbl.configure(text="")
+
+    def _alarm_fire(self, alarm):
+        """Tell the board to flash. The text goes through the same
+        transliteration the titles use - the board's font is ASCII."""
+        from telemetry import text as T
+        msg = T.clean(T.translit(alarm.get("text") or "ALARM"), 20)
+        if not self.link.open:
+            self._log("alarm: the board is not connected", "err")
+            return
+        self.link.send("%%fl=%d,%s" % (8000, msg), echo=False)
+        self._log("alarm: %s" % msg, "info")
+
+    def _alarm_tick(self):
+        """Once every few seconds, because an alarm is a minute wide.
+
+        Fired at most once per minute per alarm: this runs more often than
+        that, and a screen flashing every three seconds for a minute is not
+        what anybody meant.
+        """
+        try:
+            # The phone's, when it comes due. Once - the bridge forgets it as
+            # soon as it has been rung, so it cannot fire twice.
+            p = self.phone.pending()
+            if p and p[0] <= 1.0:
+                self._alarm_fire({"text": p[1] or "PHONE"})
+                self.phone.clear()
+            stamp = time.strftime("%Y-%m-%d %H:%M")
+            now = stamp[-5:]
+            for i, a in enumerate(self._alarms()):
+                if not a.get("on", True) or a.get("at") != now:
+                    continue
+                key = "%d@%s" % (i, a.get("at"))
+                if self._alarm_done.get(key) == stamp:
+                    continue
+                self._alarm_done[key] = stamp
+                self._alarm_fire(a)
+        except Exception as e:
+            self._log("alarm check failed: %s" % e, "err")
+        self.after(3000, self._alarm_tick)
 
     # ---- presets ---------------------------------------------------------
     def _presets(self):
@@ -1108,10 +1287,30 @@ class App(tk.Tk):
                       "src", "text"):
                 d[k] = getattr(t, k, None)
         d.update(self.sticks.read())
+        # The panel's own state. It reports all of this five times a second
+        # anyway - the board's pages are built out of it, so yours can be too.
+        nxt = self.next_alarm()
+        d["alarm_in"] = nxt[0] if nxt else None
+        d["alarm_text"] = nxt[1] if nxt else ""
+        t = self.last_tel
+        if t:
+            d["pcf"] = t.get("pcf") or []
+            d["btn"] = t.get("btn") or []
+            d["enc"] = t.get("enc") or 0
+            d["enc_total"] = t.get("tot") or 0
+            d["sw1"] = t.get("sw1") or 0
+            d["sw2"] = t.get("sw2") or 0
+            d["fps"] = t.get("fps") or 0
+            d["hid"] = 1 if t.get("hid") == "1" else 0
         snap = self.audio.now.snapshot() if getattr(self.audio, "now", None) else None
         if snap:
             d["np_title"] = snap.get("title")
             d["np_artist"] = snap.get("artist")
+            d["np_playing"] = 1 if snap.get("playing") else 0
+            pos = float(snap.get("pos") or 0)
+            dur = float(snap.get("dur") or 0)
+            d["np_pos"], d["np_dur"] = pos, dur
+            d["np_pct"] = (100.0 * pos / dur) if dur > 0 else 0.0
         return d
 
     def _remember_audio_target(self, label):
@@ -1128,6 +1327,7 @@ class App(tk.Tk):
 
     def _quit(self):
         self._stop_send.set()
+        self.phone.stop()
         self.audio.stop()
         self.hub.stop()
         self.link.disconnect()

@@ -424,6 +424,43 @@ ships and a drawing library - so the widgets live there, and what crosses the
 wire is the finished picture: 512 bytes in the exact layout of the panel's own
 memory, which makes the board's side of it a `memcpy`.
 
+**Alarms are not a widget.** A widget lives on a page, and an alarm you only
+see if you happen to be on the right page is not an alarm. The app keeps the
+clock and the list; at the minute, the board is told to flash - `%fl=8000,GET
+UP` - and it inverts the whole screen twice a second with the words in the
+middle, over whatever page is up, waking the panel first if it had gone to
+sleep. It is a whole screen, not a box over the page: `ALARM` across the middle with
+the name underneath, flipping black-on-white and white-on-black every 400 ms.
+An alarm is not a footnote to whatever you happened to be looking at.
+
+Set them in **Settings -> Alarms**; **Test** fires one now.
+
+### The phone's alarms
+
+Your alarms are on your phone. That is what actually wakes you, so the panel is
+told about them rather than asking you to type them in twice - and two sources
+for the same morning is the point, not an accident.
+
+Tick **Take alarms from the phone** and the app listens on port 8787. It shows
+the address; open it on the phone and there is a page you can set an alarm from,
+or point something at it:
+
+```
+POST /alarm    {"at_ms": 1774500000000, "text": "Work"}
+POST /alarm    {"in_s": 3600, "text": "Tea"}
+DELETE /alarm
+GET  /next     -> {"in_s": 5400, "text": "Work"}
+```
+
+The Pocket app on the phone does this by itself: **SEND MY ALARMS**, with the
+address in the box. Android hands out the next alarm through
+`AlarmManager.getNextAlarmClock()` - no permission, no notification access - so
+what leaves the phone is one timestamp and the name of the app that set it.
+
+Off by default, and it binds to the LAN: there is no account and no password,
+and the worst anybody on your wifi can do with it is flash the panel on your
+desk. The soonest of the two lists wins, whichever it came from.
+
 **Each page has a name and a header.** The board calls the slot `MINE 3` and
 always will - the name lives in the picture the app sends, so it is the app's
 to keep. With the header on, the page wears the same bar the board's own pages
@@ -432,11 +469,22 @@ in the same nine rows. It is drawn in Tahoma 9, which is what the panel's
 Cyrillic titles already use, so it sits beside the board's own text without
 looking like a different machine.
 
+It also *retracts* like the board's own: when the panel goes quiet the header
+slides up and away, and comes back when you touch something. The board reports
+where it has slid to as the fourth number of `!PAGE`, because a page the PC
+draws covers the whole screen - without that, yours would be the only header on
+the panel that never went away.
+
 **The grid is the editor's, not the panel's.** Eight pixels, because that is
 the band the display's memory is organised in and what every drawn row lines up
 with anyway. The middle of the screen is marked, and a widget dragged within
 two pixels of it snaps there and lights the line - which is the question it
 answers: where IS the middle.
+
+**Size is not always yours to set.** Text is as wide as the text, so `w` and
+`h` were two numbers you could turn all day for nothing on a Number or a Text.
+They are not offered for those kinds now, and the box the editor picks up and
+outlines is measured from what was actually drawn.
 
 **Only what the kind can do.** The field list is per widget: a Lamp cannot be
 pointed at the clock, a Bar cannot be pointed at a heading (there is no full
@@ -463,19 +511,46 @@ through the mirror and comparing: identical, byte for byte.
 
 | Widget | |
 |---|---|
-| Number | a field, with an optional caption above it |
-| Text | a label, or a text field like the source or the track |
-| Bar / Column | a fill, horizontal or vertical |
+| Number | a number, as big as you like |
+| Text | a line of text, or a field that is text |
+| Bar / Column | fills left to right, or standing up |
 | Needle | a dial, ticks rather than an arc |
-| Lamp | filled when the field is non-zero, outlined when it isn't |
+| Lamp | a dot that lights while the field is not zero - brake, HID, playing |
 | Frame / Line | for dividing things up |
 | Axis | two axes at once: a box, a deadzone, and where you are in it |
+| Button | one button of the panel, by name, lit while it is held |
+| Button row | all eight expander buttons, as the PANEL page has them |
+| Knob | the encoder, as a knob with a mark |
+| Record | the disc from MUSIC, turning while something plays |
+| Switch | a slide switch, with the position it is in filled |
+| Alarm in | how long until the next alarm - and nothing at all when there is none |
+
+**Alarm in** is the one widget that hides itself. With nothing pending it draws
+no pixels at all, so the page simply does not have it; in the editor it always
+shows, because a widget you cannot see is a widget you cannot place.
+
+The shelf says what each one is in a line, when the pointer is over it. That is
+there because "Lamp" told nobody anything.
+
+**Button** and **Switch** pick one of a list rather than a field - `A3` is not
+telemetry, it is a choice - so they get a **Which** dropdown instead of
+**Shows**.
+
+**The clock has a shape.** 24-hour, 12-hour, seconds, the date, the weekday, or
+the date and time together.
 
 **Axis** is the one widget that reads two fields - it grows a second row
 in the properties, for the up/down axis. The middle box is the deadzone: it
 FILLS when you are inside it and the dot disappears, because a dot drawn on top
 of a filled box punches a hole in it and a hole looks exactly like an empty box.
 Solid middle means centred; hollow middle with a dot somewhere means it is not.
+
+The panel's own state is all there too - the buttons, both switches, the
+encoder, the frame rate, whether HID is armed - because the board reports every
+bit of it five times a second anyway. So are the track's position, length and
+whether it is playing, which is what the board's own MUSIC page is built out
+of: a Bar pointed at **Track position %** with the *faded track* fill IS the
+song bar.
 
 The axes come from `sticks.py` - Windows' own joystick API through ctypes, no
 dependency - as -1..+1 with zero in the middle. Which stick? The one that moved

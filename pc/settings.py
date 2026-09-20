@@ -71,6 +71,16 @@ DEFAULTS = {
     # list shows the pages you built and not eight empty ones.
     "custom_pages": [0],
 
+    # Alarms: [{"at": "07:30", "text": "GET UP", "on": true}]. The app keeps
+    # the clock and the list; the board is told to flash, and flashes over
+    # whatever page is up - an alarm you only see on the right page is not one.
+    "alarms": [],
+
+    # Listen for the phone's alarms on port 8787. Off by default: it opens a
+    # port on the network, and a program that starts listening without being
+    # asked is one you have to trust further than this deserves.
+    "phone_bridge": False,
+
     # Named page arrangements: {"Driving": [1, 3, 0], ...}. Yours, not the
     # board's - it only ever hears the one list that is currently in force.
     "page_presets": {},
