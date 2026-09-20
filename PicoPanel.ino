@@ -1948,6 +1948,10 @@ static void frameShift(int8_t dx, int8_t dy) {
 }
 uint32_t tLastAct  = 0;
 
+// Core1 draws nothing until core0 says setup() is finished. Declared here
+// rather than next to setup1(), because setup() has to be able to set it.
+volatile bool core0Ready = false;
+
 // Called from core0 (a button, activity, serial). It does NOT touch the bus: it
 // only resets the clock and leaves a note. The I2C part is done by core1, in
 // oledSleepService - otherwise a simple button press would have to wait for the
@@ -3945,6 +3949,7 @@ void serialReport() {
    its pixels, one well behind has lost them all. On a screen with one bit per
    pixel that is the only fade there is. */
 static void splash() {
+  I2C_GUARD;                    // so it is safe to run at any time, not just boot
   const char *name = "PANEL";
 
   for (uint8_t n = 1; n <= 5; n++) {
@@ -4074,6 +4079,15 @@ void setup() {
   Serial.print(F("USER button on GP")); Serial.print(PIN_USR_KEY);
   Serial.print(F(": rest = ")); Serial.println(usrIdle ? F("HIGH") : F("LOW"));
   Serial.println(F("Ready. USER = page, encoder = value, '?' = commands."));
+
+  // The idle clock starts HERE, not at power-up. It used to count from zero, so
+  // the seconds spent waiting for the serial port and drawing the boot screen
+  // came out of the twenty before the panel switches itself off - you plugged
+  // the board in and it went dark while you were still looking at it.
+  tLastAct = millis();
+
+  // And only now is core1 allowed to draw. See setup1().
+  core0Ready = true;
 }
 
 void loop() {
@@ -4184,14 +4198,24 @@ void loop() {
    value a microsecond after it changed - for a screen that doesn't matter, the
    next frame shows it correctly anyway.
    -------------------------------------------------------------------------- */
+/* Core1 waits to be told, instead of guessing.
+
+   It used to sleep 1500 ms and assume core0 was finished. It was not: setup()
+   waits up to 2500 ms for the serial port alone, then scans the bus, then runs
+   the boot screen. So core1 woke up in the MIDDLE of the boot screen and both
+   cores drove the same display at once - two I2C transactions interleaved, and
+   what the panel showed was rubbish. The mirror looked fine throughout, because
+   core1's own buffer was never the problem.
+
+   The old splash got away with it by being a single frame; a boot animation
+   spread over a second and a half did not. A number that happens to be big
+   enough is not a synchronisation. */
 void setup1() {
-  // Let core0 finish initialising: until the OLED object exists and the bus is
-  // up, there's nothing to draw.
-  delay(1500);
 }
 
 void loop1() {
   static uint32_t tRender1 = 0;
+  if (!core0Ready) { delay(2); return; }   // nothing to draw, and nothing to fight over
   uint32_t now = millis();
 
   oledSleepService();

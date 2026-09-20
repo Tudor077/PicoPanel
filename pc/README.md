@@ -348,6 +348,28 @@ board underneath arrives in one piece, and the whole thing dissolves left to
 right - a band of dither sweeping across, since on one bit per pixel that is the
 only fade there is.
 
+### Core1 waits to be told
+
+The boot screen is drawn by core0, at the end of `setup()`. Core1 used to sleep
+1500 ms and assume core0 was finished by then. It was not: `setup()` waits up to
+2500 ms for the serial port alone, and then scans the bus and draws. Measured on
+this board:
+
+```
+splash ran          2581 -> 4166 ms
+setup() finished           4672 ms
+core1's first frame        4673 ms
+```
+
+The old number would have had core1 drawing from 1500 ms - a second before the
+boot screen even started - and then a hundred frames straight through it. Two
+cores driving the same display, two I2C transactions interleaved, and what the
+panel showed was rubbish while the mirror looked perfect, because core1's own
+buffer was never the problem.
+
+The single-frame splash it replaced got away with it. A number that happens to
+be big enough is not a synchronisation, so core1 now waits for a flag.
+
 ## Sharing OutGauge with CorsaConnect
 
 OutGauge has exactly one listener, and
