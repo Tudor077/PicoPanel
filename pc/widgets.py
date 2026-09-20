@@ -588,7 +588,20 @@ def bell(d, x, y, fill=1):
     d.point((x + 2, y + 6), fill=fill)
 
 
-def header_bar(d, text, right="", shift=0, alarm=""):
+def header_image(text, right="", alarm=""):
+    """The whole bar as its own little image, so it can arrive as a whole.
+
+    Drawn apart from the page because a wipe needs something to wipe IN - you
+    cannot reveal part of a thing you are drawing straight onto the screen.
+    """
+    im = Image.new("1", (W, HEADER_H), 0)
+    d = ImageDraw.Draw(im)
+    d.fontmode = "1"
+    header_bar(d, text, right, 0, alarm, bar=True)
+    return im
+
+
+def header_bar(d, text, right="", shift=0, alarm="", bar=True):
     """The board's header, drawn here: a white bar, black text, the name on
     the left and the counter on the right.
 
@@ -608,7 +621,7 @@ def header_bar(d, text, right="", shift=0, alarm=""):
     # The countdown sits at the far right whether the bar is there or not: the
     # bar retracts after twenty idle seconds, which is exactly when you want to
     # see how long you have. Black on the bar, white on the page without it.
-    on_bar = shift < HEADER_H
+    on_bar = bar and shift < HEADER_H
     if on_bar:
         d.rectangle([0, -shift, W - 1, HEADER_H - 1 - shift], fill=1)
         d.text((2, -1 - shift), text, font=f, fill=0)
@@ -651,14 +664,39 @@ def measure(w, data):
         return w.w, w.h
 
 
+def wipe(im, reveal):
+    """A left-to-right reveal, with the dither edge the splash uses.
+
+    Whole columns, then four columns of thinning dither at the front: one bit
+    per pixel has no half-lit, so a soft edge is a pattern - the same one the
+    firmware wipes PANEL in with at boot.
+    """
+    if reveal >= 1.0:
+        return im
+    if reveal <= 0.0:
+        return Image.new("1", im.size, 0)
+    out = Image.new("1", im.size, 0)
+    cut = int(round(im.width * reveal))
+    if cut > 0:
+        out.paste(im.crop((0, 0, cut, im.height)), (0, 0))
+    px, src = out.load(), im.load()
+    for x in range(max(0, cut), min(im.width, cut + 4)):
+        level = 12 - 3 * (x - cut)          # 12, 9, 6, 3 - thinning outwards
+        for y in range(im.height):
+            if src[x, y] and BAYER4[((y & 3) << 2) | (x & 3)] < level:
+                px[x, y] = 1
+    return out
+
+
 def render(widgets, data, header=None):
     """The whole 128x32 page as a PIL image, or None without PIL.
 
-    `header` is ("NAME", "3/11", shift, "6h12") to put the board's own header
-    bar on top - shift being how far it has slid away, which the board reports
-    so yours retracts with its own, and the last being the countdown to the
-    next alarm, which stays after the bar has gone. None means the whole screen
-    is yours. The widgets are drawn AFTER it, so a layout
+    `header` is ("NAME", "3/11", shift, "6h12", reveal): the name, where the
+    page sits in the rotation, how far the board's own bar has slid away (so
+    yours retracts with it), the countdown to the next alarm (which stays after
+    the bar has gone), and how much of the bar has arrived - 0 to 1, for the
+    wipe that plays when any of it changes. None means the whole screen is
+    yours. The widgets are drawn AFTER it, so a layout
     made before the header existed still shows rather than disappearing under
     a bar nobody has moved it out of yet.
     """
@@ -669,9 +707,22 @@ def render(widgets, data, header=None):
     d.fontmode = "1"                 # 1-bit screen: antialiasing is mud
     if header:
         try:
-            header_bar(d, header[0], header[1] if len(header) > 1 else "",
-                       header[2] if len(header) > 2 else 0,
-                       header[3] if len(header) > 3 else "")
+            name = header[0]
+            right = header[1] if len(header) > 1 else ""
+            shift = header[2] if len(header) > 2 else 0
+            alarm = header[3] if len(header) > 3 else ""
+            reveal = header[4] if len(header) > 4 else 1.0
+            if shift < HEADER_H:
+                bar = header_image(name, right, alarm)
+                img.paste(wipe(bar, reveal), (0, -shift))
+            elif alarm:
+                # The bar has gone; the countdown has not. It is drawn onto the
+                # page itself, and it arrives with the same wipe.
+                badge = Image.new("1", (W, HEADER_H), 0)
+                bd = ImageDraw.Draw(badge)
+                bd.fontmode = "1"
+                header_bar(bd, name, right, 0, alarm, bar=False)
+                img.paste(wipe(badge, reveal), (0, 0))
         except Exception:
             pass
     for w in widgets:

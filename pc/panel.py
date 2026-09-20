@@ -793,36 +793,34 @@ class App(tk.Tk):
         pg = CUSTOM_FIRST + slot
         order = self._pg_ids[0]
         where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
-        name = self._typed("n%d" % slot, self.page_name(pg))
-        badge = self._typed("a%d" % slot, self.alarm_badge())
+        name = self.page_name(pg)
+        badge = self.alarm_badge()
         # The third number is where the board's own header has slid to, so
         # yours slides with it and goes away when the panel goes quiet. The
         # fourth is the countdown, which does NOT go away with it: the board
         # keeps showing it on its own pages too.
-        return (name, where, self.link.board_hdr, badge)
+        return (name, where, self.link.board_hdr, badge,
+                self._reveal(slot, name, where, bool(badge)))
 
-    # How fast the letters land. The board's splash types "PANEL" at about
-    # this rate, and two things typing at two speeds on one screen would look
-    # like two different machines.
-    TYPE_S = 0.06
+    # How long the whole bar takes to arrive. The board wipes its splash in
+    # over about this long; two things sweeping at two speeds on one screen
+    # would look like two machines.
+    WIPE_S = 0.35
 
-    def _typed(self, key, text):
-        """That string, revealed a letter at a time when it CHANGES.
+    def _reveal(self, slot, *content):
+        """0 to 1: how much of the header has arrived.
 
-        Rename a page and the new name types itself onto the panel rather than
-        blinking into existence - the same way the board writes PANEL at boot.
-        Anything that has finished arriving is returned whole, so this costs
-        nothing once it has.
+        Anything changing up there - the name, the page's place in the
+        rotation, an alarm appearing - starts the whole bar over from the
+        left. Not the countdown's own ticking, though: a bar that swept every
+        sixty seconds would be a fidget, not an animation.
         """
-        st = self._typing.get(key)
+        st = self._typing.get(slot)
         now = time.time()
-        if st is None or st[0] != text:
-            st = (text, now)
-            self._typing[key] = st
-        if not text:
-            return text
-        shown = int((now - st[1]) / self.TYPE_S)
-        return text if shown >= len(text) else text[:shown]
+        if st is None or st[0] != content:
+            st = (content, now)
+            self._typing[slot] = st
+        return min(1.0, (now - st[1]) / self.WIPE_S)
 
     def slot_of(self, pg):
         """Which of the pages you draw yourself this is, or None."""

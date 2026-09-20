@@ -467,10 +467,12 @@ Off by default, and it binds to the LAN: there is no account and no password,
 and the worst anybody on your wifi can do with it is flash the panel on your
 desk. The soonest of the two lists wins, whichever it came from.
 
-**A changed header types itself in.** Rename a page and the new name lands a
-letter at a time on the panel, the way the board writes PANEL at boot, and so
-does the alarm countdown when it first appears. Same rate as the splash: two
-things typing at two speeds on one screen would look like two machines.
+**A changed header sweeps in.** Rename a page, reorder it, have an alarm
+appear - anything up there changing and the WHOLE bar arrives again from the
+left, with the same dithered leading edge the splash wipes PANEL in with. Not
+letter by letter: the bar, the name, the counter and the countdown come in
+together, because they are one thing. The countdown's own ticking does not
+start it over - a bar that swept every sixty seconds would be a fidget.
 
 **Each page has a name and a header.** The board calls the slot `MINE 3` and
 always will - the name lives in the picture the app sends, so it is the app's
@@ -488,9 +490,14 @@ the panel that never went away.
 
 **The grid is the editor's, not the panel's.** Eight pixels, because that is
 the band the display's memory is organised in and what every drawn row lines up
-with anyway. The middle of the screen is marked, and a widget dragged within
-two pixels of it snaps there and lights the line - which is the question it
-answers: where IS the middle.
+with anyway.
+
+The middle of the screen is marked, and the line lights when the selected
+widget's own middle lands on it - to the pixel, per axis, so being centred
+across but not down is something you can see. It only tells you: nothing snaps.
+A first version pulled the widget onto the centre from two pixels away, which
+is a deadzone by another name - you could not put something one pixel off
+centre if you wanted to.
 
 **Size is not always yours to set.** Text is as wide as the text, so `w` and
 `h` were two numbers you could turn all day for nothing on a Number or a Text.

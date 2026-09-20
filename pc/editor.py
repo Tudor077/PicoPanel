@@ -361,25 +361,16 @@ class Editor(ttk.Frame):
             return
         dx, dy = self._drag
         w = self.sel
-        x = max(0, min(WG.W - 1, ev.x // ZOOM - dx))
-        y = max(0, min(WG.H - 1, ev.y // ZOOM - dy))
-        # Snap to the middle of the SCREEN, within a couple of pixels. Knowing
-        # where the middle is was the thing that was actually wanted; a line
-        # you can see and a widget that clicks onto it beats counting pixels.
-        self._snap = [False, False]
-        if abs((x + w.w / 2.0) - WG.W / 2.0) <= 2:
-            x = int(round(WG.W / 2.0 - w.w / 2.0))
-            self._snap[0] = True
-        if abs((y + w.h / 2.0) - WG.H / 2.0) <= 2:
-            y = int(round(WG.H / 2.0 - w.h / 2.0))
-            self._snap[1] = True
-        w.x, w.y = x, y
+        # No snapping. It pulled the widget about within two pixels of the
+        # middle, which is a deadzone by another name: you could not put a
+        # thing one pixel off centre if you wanted to. The line only tells you.
+        w.x = max(0, min(WG.W - 1, ev.x // ZOOM - dx))
+        w.y = max(0, min(WG.H - 1, ev.y // ZOOM - dy))
 
     def _up(self, _ev):
         if self._drag is not None:
             self._save()
         self._drag = None
-        self._snap = [False, False]
 
     def _show_props(self):
         w = self.sel
@@ -492,6 +483,7 @@ class Editor(ttk.Frame):
                 self._photo_ref = _photo(img)
                 self.canvas.delete("all")
                 self.canvas.create_image(0, 0, anchor="nw", image=self._photo_ref)
+                self._centred()
                 self._grid()
                 if self.sel:
                     w = self.sel
@@ -513,6 +505,21 @@ class Editor(ttk.Frame):
                 except Exception:
                     pass
         self.after(100, self._tick)
+
+    def _centred(self):
+        """Is the selected widget dead centre, on each axis?
+
+        To the pixel, and only to say so: the middle line lights when the
+        widget's own middle lands on the screen's, and stays lit while it is
+        selected - it is a readout, not a magnet.
+        """
+        self._snap = [False, False]
+        w = self.sel
+        if not w:
+            return
+        ww, hh = self._size_of(w)
+        self._snap = [round(w.x + ww / 2.0) == round(WG.W / 2.0),
+                      round(w.y + hh / 2.0) == round(WG.H / 2.0)]
 
     def _grid(self):
         """The screen's own grid, over the picture but never in it.
