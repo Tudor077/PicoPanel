@@ -56,7 +56,8 @@ class PageList(ttk.Frame):
     def __init__(self, master, app):
         super().__init__(master)
         self.app = app
-        self.shots = {}             # page number -> PhotoImage
+        self.shots = {}             # (page, sub) -> PhotoImage
+        self._keep = []             # the shrunk ones, so Tk keeps them
         self._blank = None
         self._rows = {}
         self._drag_from = None
@@ -118,9 +119,11 @@ class PageList(ttk.Frame):
         for child in self.list.winfo_children():
             child.destroy()
         self._rows = {}
+        self._keep = []
         order, rest = self.app._pg_ids
         for i, pg in enumerate(order):
             self._card(pg, i, True)
+            self._faces(pg)
         if rest:
             head = tk.Frame(self.list, bg=BG)
             head.pack(fill="x", pady=(10, 2))
@@ -129,6 +132,35 @@ class PageList(ttk.Frame):
             self._wheel(head)
         for pg in rest:
             self._card(pg, None, False)
+            self._faces(pg)
+
+    def _faces(self, pg):
+        """GAME and MUSIC have faces of their own - USER walks them without
+        leaving the page - so they are shown indented under it.
+
+        They are not draggable and they have no buttons: the rotation is by
+        page, and the sub-pages come with the page whether you like it or not.
+        How many there are is the board's to know: GAME's count depends on
+        what is sending.
+        """
+        n = self.app.subs_of(pg)
+        for sub in range(1, n):
+            shot = self.shots.get((pg, sub)) or self._blank_shot()
+            small = shot.subsample(SHOT_SCALE)   # the panel's own size, 128x32
+            self._keep.append(small)             # or Tk drops it and shows air
+            row = tk.Frame(self.list, bg=CARD, bd=1, relief="solid")
+            row.pack(fill="x", padx=(34, 4), pady=(0, 3))
+            tk.Label(row, text="↳", bg=CARD, fg=DIM,
+                     font=("", 9)).pack(side="left", padx=(6, 2))
+            pic = tk.Label(row, image=small, bg="#0a0c0e", bd=0)
+            pic.pack(side="left", padx=4, pady=3)
+            tk.Label(row, text="%s - %d of %d" % (self.app.page_name(pg),
+                                                  sub + 1, n),
+                     bg=CARD, fg=DIM, font=("", 9)).pack(side="left", padx=6)
+            for wdg in (row, pic):
+                wdg.bind("<Button-1>",
+                         lambda _e, p=pg, s=sub: self.app.pg_show(p, s))
+                self._wheel(wdg)
 
     def _card(self, pg, idx, inside):
         name = self.app.page_name(pg)
@@ -144,7 +176,7 @@ class PageList(ttk.Frame):
                         cursor="fleur" if inside else "arrow", font=("", 9))
         grip.pack(side="left", padx=(4, 2))
 
-        pic = tk.Label(card, image=self.shots.get(pg) or self._blank_shot(),
+        pic = tk.Label(card, image=self.shots.get((pg, 0)) or self._blank_shot(),
                        bg="#0a0c0e", bd=0)
         pic.pack(side="left", padx=4, pady=4)
 
@@ -162,7 +194,7 @@ class PageList(ttk.Frame):
         if self.app.slot_of(pg) is not None:
             tk.Label(side, text="yours - double-click", bg=CARD,
                      fg=DIM, font=("", 8)).pack(anchor="w")
-        if pg not in self.shots:
+        if (pg, 0) not in self.shots:
             tk.Label(side, text="no picture yet", bg=CARD,
                      fg="#6b7280", font=("", 8)).pack(anchor="w")
 
@@ -229,7 +261,8 @@ class PageList(ttk.Frame):
         """
         self.app.collect_shots(self._shot_done)
 
-    def _shot_done(self, pg, photo):
+    def _shot_done(self, key, photo):
+        """`key` is (page, sub-page) - GAME and MUSIC have several faces."""
         if photo is not None:
-            self.shots[pg] = photo
+            self.shots[key] = photo
         self.refill()

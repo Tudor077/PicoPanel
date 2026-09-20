@@ -82,6 +82,8 @@ def main():
         "--hidden-import", "editor",
         "--hidden-import", "single",
         "--hidden-import", "pagelist",
+        # The joystick axes, read through winmm with ctypes.
+        "--hidden-import", "sticks",
         "--hidden-import", "PIL.ImageFont",
         "--hidden-import", "PIL.ImageDraw",
         # UI Automation, for an app's own volume slider. comtypes builds the

@@ -37,6 +37,7 @@ import audio
 import autostart
 import editor
 import pagelist
+import sticks
 import widgets as WG
 import settings
 import single
@@ -67,6 +68,9 @@ PAGE_NAMES = ["PANEL", "GAME", "MUSIC",
 # and only the ones you have made appear in the list. Eight is where it stops
 # because each one is a whole frame of the board's RAM.
 CUSTOM_FIRST, CUSTOM_N = 3, 8
+# The two pages that have faces of their own, by name rather than by number:
+# the numbers move every time the board grows a page, and have.
+P_GAME, P_MUSIC = PAGE_NAMES.index("GAME"), PAGE_NAMES.index("MUSIC")
 
 PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
@@ -143,6 +147,11 @@ class Link:
         # the queue because the sender thread reads it, and the queue is drained
         # by the window - which runs four times a second when it is in the tray.
         self.board_page = -1
+        # GAME and MUSIC have faces of their own, and GAME's count depends on
+        # what is sending - a tank has less to show than an airliner - so the
+        # board tells us rather than us guessing.
+        self.board_sub = 0
+        self.subs_seen = {}         # page -> how many sub-pages it said it has
         # Called straight from the reader thread for '!AUD' lines. It only
         # enqueues, so the reader is never held up by COM calls.
         self.on_audio = on_audio
@@ -233,8 +242,15 @@ class Link:
                         pass
                     continue
                 if line.startswith("!PAGE "):
+                    # "!PAGE 1 2 4": page, the face showing, how many it has.
+                    # The older board said only the first number, and that one
+                    # still means the same thing.
                     try:
-                        self.board_page = int(line.split()[1])
+                        bits = line.split()
+                        self.board_page = int(bits[1])
+                        if len(bits) >= 4:
+                            self.board_sub = int(bits[2])
+                            self.subs_seen[self.board_page] = max(1, int(bits[3]))
                     except (ValueError, IndexError):
                         pass
                     continue
@@ -346,6 +362,10 @@ class App(tk.Tk):
         self.audio.mixer.set_use_inapp(bool(self.cfg.get("app_own_volume", True)))
         if self.audio.lyrics:
             self.audio.lyrics.enabled = bool(self.cfg.get("karaoke", False))
+        # A stick, a wheel or a pad, if one is plugged in: the centring
+        # widget's two axes. Polled only when a widget asks - measured at
+        # 4 microseconds for both devices on this machine.
+        self.sticks = sticks.Sticks()
         self.link = Link(self.q, on_audio=self.audio.request)
         self.hub = Hub()
         self.hub.yield_outgauge = bool(self.cfg.get("yield_outgauge"))
@@ -353,6 +373,7 @@ class App(tk.Tk):
         self.tel_count = 0
         self.tel_time = time.time()
         self.last_send = 0.0
+        self._fb_seq = 0        # frames arrived, so the walk can wait for new ones
         self.hold_until = 0.0   # don't reconnect before this
         self.tray = None
 
@@ -765,10 +786,22 @@ class App(tk.Tk):
         self.cfg["layouts"] = lay
         settings.save(self.cfg)
 
-    def pg_show(self, pg):
+    def subs_of(self, pg):
+        """How many faces that page has, as the board last said. One until it
+        has been there - the count is the board's to know, not ours."""
+        return self.link.subs_seen.get(pg, 1)
+
+    def pg_show(self, pg, sub=0):
         """Put that page on the panel, so the card you clicked is the thing you
         are looking at."""
         self.link.send("%%gp=%d" % pg, echo=False)
+        key = "gs" if pg == P_GAME else ("ms" if pg == P_MUSIC else None)
+        if key:
+            # Always, including face 0. The board keeps whichever face it was
+            # left on, so "show me GAME" with no sub said left it wherever it
+            # happened to be - and the walk then waited two seconds for a page
+            # it had never actually asked for.
+            self.link.send("%%%s=%d" % (key, sub), echo=False)
 
     def pg_open(self, pg):
         """Double-click: lay this page out. Only your own pages have a layout -
@@ -872,27 +905,77 @@ class App(tk.Tk):
         if not self.link.open:
             self._log("connect first - the pictures come from the board", "err")
             return
-        if not self.mirror_var.get():
-            self.mirror_var.set(True)
-            self._toggle_mirror()
-        self._shot_home = self.link.board_page
-        self._shot_queue = [i for i in range(len(PAGE_NAMES))
+        self.mirror_var.set(True)
+        self._shot_home = (self.link.board_page, self.link.board_sub)
+        self._shot_late = 0
+        self._shot_queue = [(i, 0) for i in range(len(PAGE_NAMES))
                             if self.page_exists(i)]
         self._shot_done = done
-        self.after(250, self._shot_step)
+        self._shot_seq0 = self._fb_seq
+        self.after(300, self._shot_mirror)
+
+    def _shot_mirror(self, tries=0):
+        """Frames have to be arriving before the walk can start.
+
+        The board toggles its mirror with 'o' and takes no view on which way
+        round it should be - so asking for it while it is already on turns it
+        OFF, and the walk then photographs nothing at all while looking busy.
+        Here we watch for frames instead of assuming, and ask again if none
+        come.
+        """
+        if self._fb_seq != self._shot_seq0:
+            self.after(50, self._shot_step)
+            return
+        if tries >= 3:
+            self._log("the board is not sending frames - no pictures", "err")
+            return
+        self.link.send("o", echo=False)
+        self._shot_seq0 = self._fb_seq
+        self.after(600, lambda t=tries + 1: self._shot_mirror(t))
 
     def _shot_step(self):
         if not self._shot_queue:
-            if self._shot_home is not None and self._shot_home >= 0:
-                self.pg_show(self._shot_home)
+            pg, sb = self._shot_home
+            if pg is not None and pg >= 0:
+                self.pg_show(pg, sb)
+            if self._shot_late:
+                self._log("%d page%s did not answer in time - no picture for "
+                          "those" % (self._shot_late,
+                                     "" if self._shot_late == 1 else "s"), "err")
             self._log("page pictures updated", "info")
             return
-        pg = self._shot_queue.pop(0)
-        self.pg_show(pg)
-        self.after(pagelist.SETTLE_MS, lambda p=pg: self._shot_grab(p))
+        pg, sb = self._shot_queue.pop(0)
+        self.pg_show(pg, sb)
+        self._shot_want = (pg, sb)
+        self._shot_mark = None
+        self._shot_until = time.time() + 2.0
+        self.after(20, self._shot_wait)
 
-    def _shot_grab(self, pg):
-        fb = getattr(self, "_last_fb", None)
+    def _shot_wait(self):
+        """Wait for the board to SAY it is there, then for two whole frames.
+
+        A fixed delay was wrong and looked convincing: at 130 ms, half the
+        pictures were of the page before - measured, 7 of 15 - so the cards
+        showed MUSIC under GAME and nobody would have known which were true.
+        The board announces its page; believing it beats guessing at it.
+
+        Two frames, not one: the frame in flight when the page changed was
+        drawn before it changed.
+        """
+        pg, sb = self._shot_want
+        if (self.link.board_page == pg and self.link.board_sub == sb
+                and self._shot_mark is None):
+            self._shot_mark = self._fb_seq
+        if self._shot_mark is not None and self._fb_seq >= self._shot_mark + 2:
+            self._shot_grab(pg, sb)
+        elif time.time() > self._shot_until:
+            self._shot_late += 1
+            self._shot_grab(pg, sb, late=True)   # no picture rather than a lie
+        else:
+            self.after(20, self._shot_wait)
+
+    def _shot_grab(self, pg, sb, late=False):
+        fb = None if late else getattr(self, "_last_fb", None)
         photo = None
         if fb:
             try:
@@ -900,9 +983,15 @@ class App(tk.Tk):
             except Exception:
                 photo = None
         try:
-            self._shot_done(pg, photo)
+            self._shot_done((pg, sb), photo)
         except Exception:
             pass
+        # Now that we have been there, the board has told us how many faces
+        # that page has - so the rest of them go on the queue next, in place.
+        if sb == 0:
+            more = self.subs_of(pg)
+            if more > 1:
+                self._shot_queue[:0] = [(pg, i) for i in range(1, more)]
         self.after(30, self._shot_step)
 
     # ---- the screen ------------------------------------------------------
@@ -974,6 +1063,7 @@ class App(tk.Tk):
                       "kts", "vspeed_fpm", "alt_ft", "hdg", "gforce", "aoa",
                       "src", "text"):
                 d[k] = getattr(t, k, None)
+        d.update(self.sticks.read())
         snap = self.audio.now.snapshot() if getattr(self.audio, "now", None) else None
         if snap:
             d["np_title"] = snap.get("title")
@@ -1259,8 +1349,10 @@ class App(tk.Tk):
         self._fb_img = img           # keep it alive, or Tk shows nothing
 
         # Kept for the page cards: they are photographed by driving the board
-        # from page to page and taking whatever the mirror last sent.
+        # from page to page. The counter is how the walk knows a frame is one
+        # drawn AFTER the page changed rather than the one already in flight.
         self._last_fb = (w, h, data)
+        self._fb_seq = getattr(self, "_fb_seq", 0) + 1
 
         if not self.mirror_var.get():
             # Frames arrived without us asking - the board was already mirroring

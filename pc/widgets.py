@@ -44,6 +44,11 @@ FIELDS = [
     ("src", "Source name"),         ("text", "Vehicle / text"),
     ("np_title", "Track title"),    ("np_artist", "Artist"),
     ("clock", "Clock"),             ("none", "(nothing)"),
+    # A stick, a wheel or a pad, through Windows' own joystick API - see
+    # sticks.py. These are signed: -1 hard over, 0 centred, +1 hard the other
+    # way, which is what makes a centring widget possible at all.
+    ("joy_x", "Stick X"),           ("joy_y", "Stick Y"),
+    ("joy_z", "Stick Z"),           ("joy_r", "Stick R"),
 ]
 FIELD_LABEL = dict(FIELDS)
 
@@ -75,20 +80,22 @@ class Widget:
     w: int = 60
     h: int = 16
     field: str = "speed_kmh"
+    field_y: str = "none"    # the second axis, for the kinds that have two
     label: str = ""
     size: int = 14           # text height, for the kinds that have text
     opts: dict = dc_field(default_factory=dict)
 
     def to_dict(self):
         return {"kind": self.kind, "x": self.x, "y": self.y, "w": self.w,
-                "h": self.h, "field": self.field, "label": self.label,
-                "size": self.size, "opts": dict(self.opts)}
+                "h": self.h, "field": self.field, "field_y": self.field_y,
+                "label": self.label, "size": self.size, "opts": dict(self.opts)}
 
     @staticmethod
     def from_dict(d):
         return Widget(kind=d.get("kind", "value"), x=int(d.get("x", 0)),
                       y=int(d.get("y", 0)), w=int(d.get("w", 60)),
                       h=int(d.get("h", 16)), field=d.get("field", "speed_kmh"),
+                      field_y=d.get("field_y", "none"),
                       label=d.get("label", ""), size=int(d.get("size", 14)),
                       opts=dict(d.get("opts") or {}))
 
@@ -192,6 +199,51 @@ def _d_lamp(d, w, data):
                font=_font(9), fill=1)
 
 
+def _axis(data, key):
+    """A field as -1..+1. The stick axes already are; anything else is taken
+    as it comes and clamped, so pointing this at throttle puts 0.6 to the
+    right of the middle rather than pretending to be something it is not."""
+    return max(-1.0, min(1.0, _num(data, key)))
+
+
+def _d_dz(d, w, data):
+    """The deadzone: a box, the middle, and where you actually are.
+
+    One bit per pixel, so "in the middle" cannot be a colour. The middle box
+    FILLS when you are inside it and the dot goes hollow - a state you can read
+    across a desk, instead of counting pixels against a crosshair.
+    """
+    x0, y0 = w.x, w.y
+    x1, y1 = w.x + w.w - 1, w.y + w.h - 1
+    d.rectangle([x0, y0, x1, y1], outline=1)
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+
+    # Ticks at the middle of each edge rather than a full crosshair: a cross
+    # through the whole box and a dot on top of it are the same pixels.
+    d.line([cx, y0 + 1, cx, y0 + 2], fill=1)
+    d.line([cx, y1 - 2, cx, y1 - 1], fill=1)
+    d.line([x0 + 1, cy, x0 + 2, cy], fill=1)
+    d.line([x1 - 2, cy, x1 - 1, cy], fill=1)
+
+    dz = float(w.opts.get("dz", 0.18))
+    dx = max(1.0, (w.w / 2.0 - 2) * dz)
+    dy = max(1.0, (w.h / 2.0 - 2) * dz)
+    ax = _axis(data, w.field)
+    ay = _axis(data, w.field_y)
+    home = abs(ax) <= dz and abs(ay) <= dz
+    if home:
+        # Inside: the middle goes solid and there is no separate dot. A dot
+        # drawn on top of a filled box punches a hole in it, and a hole in a
+        # box looks exactly like an empty box - the two states have to differ
+        # at a glance, which is the entire job of this widget.
+        d.rectangle([cx - dx, cy - dy, cx + dx, cy + dy], fill=1, outline=1)
+        return
+    d.rectangle([cx - dx, cy - dy, cx + dx, cy + dy], outline=1)
+    px = cx + ax * (w.w / 2.0 - 2)
+    py = cy + ay * (w.h / 2.0 - 2)
+    d.rectangle([px - 1, py - 1, px + 1, py + 1], fill=1, outline=1)
+
+
 def _d_box(d, w, data):
     d.rectangle([w.x, w.y, w.x + w.w - 1, w.y + w.h - 1], outline=1)
 
@@ -203,7 +255,11 @@ def _d_line(d, w, data):
 DRAW = {
     "value": _d_value, "label": _d_label, "bar": _d_bar, "vbar": _d_vbar,
     "dial": _d_dial, "lamp": _d_lamp, "box": _d_box, "line": _d_line,
+    "dz": _d_dz,
 }
+
+# The kinds that read two fields, so the editor knows when to offer a second.
+TWO_FIELD = {"dz"}
 
 # What the palette shows, and what a fresh one of each looks like.
 PALETTE = [
@@ -215,6 +271,7 @@ PALETTE = [
     ("lamp",  "Lamp",       dict(w=30, h=9, field="brake", label="BRK")),
     ("box",   "Frame",      dict(w=60, h=20, field="none")),
     ("line",  "Line",       dict(w=40, h=1, field="none")),
+    ("dz",    "Centering",  dict(w=30, h=30, field="joy_x", field_y="joy_y")),
 ]
 
 

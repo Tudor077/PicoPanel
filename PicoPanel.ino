@@ -3925,8 +3925,8 @@ void printHelp() {
   Serial.println(F("    modules; a faster bus is what shortens the tear."));
   Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..8"));
   Serial.println(F("    %gs=n %ms=n   which sub-page of GAME / MUSIC"));
-  Serial.println(F("    The board says '!PAGE n' when the page changes, so the"));
-  Serial.println(F("    app knows when to send them."));
+  Serial.println(F("    The board says '!PAGE n sub subs' on every change, so"));
+  Serial.println(F("    the app knows when to send them - and what to walk."));
   Serial.println(F("    %gp=3        show that page now (the app's preview)"));
   Serial.println(F("    %pg=1,2,0,3  the rotation, in order, by page number."));
   Serial.println(F("    Left out = not in it. The report shows it as ORD=."));
@@ -4357,19 +4357,37 @@ void setup() {
    custom one and stay quiet otherwise. Said on CHANGE rather than in the status
    line, because the status line only goes out when reporting is switched on and
    this has to work regardless. */
+// Which face of this page is showing, and how many it has. GAME's count
+// depends on what is sending - a tank has less to show than an airliner - so
+// the app cannot work it out for itself and is told.
+static void pageFace(uint8_t *cur, uint8_t *tot) {
+  if (page == P_GAME)       { *cur = gameSub;  *tot = gameSubCount(); }
+  else if (page == P_MUSIC) { *cur = musicSub; *tot = MUSIC_SUBS; }
+  else                      { *cur = 0;        *tot = 1; }
+}
+
 static void pageAnnounce() {
-  static uint8_t  said = 255;
+  static uint8_t  said = 255, saidSub = 255;
   static uint32_t lastSaid = 0;
   uint32_t now = millis();
+  uint8_t cur, tot;
+  pageFace(&cur, &tot);
   // On change, AND every couple of seconds regardless. Edge-triggered alone
   // was wrong in a way that only showed up with the app started second: the
   // board was already on the page, had already said so to nobody, and the app
   // never found out. A repeat costs eight bytes and removes the whole class.
-  if (page == said && (now - lastSaid) < 2000UL) return;
+  if (page == said && cur == saidSub && (now - lastSaid) < 2000UL) return;
   said = page;
+  saidSub = cur;
   lastSaid = now;
+  // "!PAGE 1 2 4" - page, the sub-page showing, how many it has. The first
+  // number is all the older app read, and it still is.
   Serial.print(F("!PAGE "));
-  Serial.println(page);
+  Serial.print(page);
+  Serial.print(' ');
+  Serial.print(cur);
+  Serial.print(' ');
+  Serial.println(tot);
 }
 
 void loop() {

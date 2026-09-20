@@ -352,6 +352,19 @@ the moment the firmware changed one it would start lying.
 Drag a card by its handle to reorder. Clicking one shows it on the panel.
 Double-clicking one of **your own** pages opens its editor in a window.
 
+GAME and MUSIC have faces of their own - the sub-pages USER walks without
+leaving the page - and those are shown indented underneath, with their own
+pictures. How many there are is the board's to know, not the app's: GAME's
+count depends on what is sending, because a tank has less to show than an
+airliner. It says so in `!PAGE <page> <face> <faces>`.
+
+The walk waits for the board to say it has arrived, and then for two whole
+frames, rather than trusting a fixed delay. With a 130 ms delay, 7 of 15
+pictures were of the previous page - measured - and the cards showed MUSIC
+under GAME convincingly enough that nobody would have questioned them. A page
+that does not answer in two seconds gets no picture at all, which is the honest
+answer.
+
 Arrangements can be named and kept: **Preset** saves the list you have, and
 brings it back later. They live in the app's settings, not on the board - the
 board only ever hears the one list currently in force.
@@ -424,6 +437,19 @@ through the mirror and comparing: identical, byte for byte.
 | Needle | a dial, ticks rather than an arc |
 | Lamp | filled when the field is non-zero, outlined when it isn't |
 | Frame / Line | for dividing things up |
+| Centering | two axes at once: a box, a deadzone, and where you are in it |
+
+**Centering** is the one widget that reads two fields - it grows a second row
+in the properties, for the up/down axis. The middle box is the deadzone: it
+FILLS when you are inside it and the dot disappears, because a dot drawn on top
+of a filled box punches a hole in it and a hole looks exactly like an empty box.
+Solid middle means centred; hollow middle with a dot somewhere means it is not.
+
+The axes come from `sticks.py` - Windows' own joystick API through ctypes, no
+dependency - as -1..+1 with zero in the middle. Which stick? The one that moved
+last. There are usually two here, because the panel is itself a gamepad, and a
+settings box asking which is which would be a question with no good answer:
+wiggle the thing you mean. A poll of both devices measured 4 microseconds.
 
 Each one in the palette shows a picture of ITSELF, drawn by the widget's own
 code with made-up numbers - a bar half full, a needle pointing somewhere. Not a

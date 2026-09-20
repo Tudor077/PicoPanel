@@ -40,7 +40,8 @@ def _photo(img, size=None):
 # Made-up numbers for the shelf, so a bar is half full and a needle points
 # somewhere rather than every icon sitting at zero and looking alike.
 ICON_DATA = {"speed_kmh": 88, "rpm": 4200, "rpm_max": 7000, "fuel_pct": 62,
-             "brake": 1, "throttle": 0.6, "src": "ABC", "gear": 3}
+             "brake": 1, "throttle": 0.6, "src": "ABC", "gear": 3,
+             "joy_x": 0.5, "joy_y": -0.35}
 
 
 def icon(kind, defaults, zoom=2):
@@ -144,6 +145,21 @@ class Editor(ttk.Frame):
         e = ttk.Entry(row, textvariable=self.l_var, width=8)
         e.pack(side="left", padx=4)
         e.bind("<KeyRelease>", lambda _e: self._edit())
+
+        # A second field, for the kinds that read two. Hidden the rest of the
+        # time: one more combobox on every widget, greyed out on seven of the
+        # nine, is worse than a row that comes and goes.
+        self.row2 = ttk.Frame(props)
+        ttk.Label(self.row2, text="up / down shows").pack(side="left")
+        self.fy_var = tk.StringVar()
+        self.fy_box = ttk.Combobox(self.row2, textvariable=self.fy_var, width=15,
+                                   state="readonly",
+                                   values=[lbl for _k, lbl in WG.FIELDS])
+        self.fy_box.pack(side="left", padx=4)
+        self.fy_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
+        ttk.Label(self.row2, foreground="#666",
+                  text="middle box = the deadzone; it fills when you are in it"
+                  ).pack(side="left", padx=10)
 
         self.spins = {}
         for name, lo, hi in (("size", 6, 30), ("w", 1, WG.W), ("h", 1, WG.H)):
@@ -258,6 +274,11 @@ class Editor(ttk.Frame):
         w = self.sel
         if not w:
             return
+        if w.kind in WG.TWO_FIELD:
+            self.row2.pack(fill="x", padx=6, pady=(0, 4))
+            self.fy_var.set(WG.FIELD_LABEL.get(w.field_y, w.field_y))
+        else:
+            self.row2.pack_forget()
         self.f_var.set(WG.FIELD_LABEL.get(w.field, w.field))
         self.l_var.set(w.label)
         self.spins["size"].set(w.size)
@@ -272,6 +293,11 @@ class Editor(ttk.Frame):
         for key, lbl in WG.FIELDS:
             if lbl == want:
                 w.field = key
+                break
+        want_y = self.fy_var.get()
+        for key, lbl in WG.FIELDS:
+            if lbl == want_y:
+                w.field_y = key
                 break
         w.label = self.l_var.get()
         try:
