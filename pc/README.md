@@ -325,6 +325,42 @@ key.
 
 Until you tick it, nothing leaves the machine and the page says so.
 
+## The Settings tab
+
+What the board is doing right now stays on the Panel tab; what you want it to do
+lives here. They were mixed together in one column of buttons, which is fine for
+five things and useless for twelve.
+
+**Pages on the panel.** USER walks a LIST, not a count, and this is the list:
+drag pages up and down, or move them out of the rotation entirely. A page you
+never look at is not worth three presses to get past. The board keeps it in RAM
+and forgets it when unplugged, so the app sends it again on every connect -
+which beats wearing out flash for something re-sent in fifty milliseconds.
+
+**Rev counter: a bar or a needle.** The needle is a real dial - ticks rather than
+a drawn arc, because an arc that size comes out as a smudge of stair-stepped
+pixels and ticks give you a scale for the same cost. Six of them, not eleven:
+eleven fit geometrically and came out as a ball of dots, and a scale you cannot
+count is worse than none. The ones past the redline are longer, which is the
+only way left to mark the danger end when there is no colour. Over the limiter
+the needle blinks. The `km/h` label goes when the dial is on - a big number next
+to a rev counter is the speed, and the dial needs the room.
+
+**I2C speed, which is as close to vsync as this gets.** There is no vsync on
+these modules: they bring out SDA and SCL and nothing else, no tearing-effect
+line. What you can do is spend less time writing the frame, because the tear is
+the panel showing a buffer that is half old and half new. Measured on this
+board:
+
+| | |
+|---|---|
+| 400 kHz | 18.1 ms a frame |
+| 1 MHz | 9.0 ms a frame |
+
+1 MHz is past what the SSD1306 promises, which is why it is a setting and not
+the default: if yours dislikes it the screen fills with rubbish and you come
+back here and set it down.
+
 ## Looking after the screen
 
 An OLED wears out the pixels that are lit, and this panel draws the same header

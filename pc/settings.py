@@ -38,6 +38,13 @@ DEFAULTS = {
     # the words, sending the artist, the title and the length. Nothing else,
     # and only once per track - but it is your listening, so you turn it on.
     "karaoke": False,
+
+    # The board's own settings. It holds these in RAM only and forgets them the
+    # moment it is unplugged, so the app sends them again on every connect -
+    # which beats wearing out flash for something re-sent in fifty milliseconds.
+    "page_order": None,     # None = the board's own order, all of them
+    "rpm_style": 0,         # 0 a bar, 1 a needle
+    "i2c_khz": 400,
 }
 
 

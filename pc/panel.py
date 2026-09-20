@@ -50,7 +50,10 @@ BAUD = 115200
 SEND_HZ = 60
 STALE_S = 2.0
 
-PAGE_NAMES = ["PANEL", "GAME", "HID", "SWITCHES", "ENCODER",
+# The board's pages, in the order of its own enum - the app talks about them
+# by number, so this list IS the protocol. It had fallen behind: MUSIC was
+# added to the board and not here, so every label after it was one out.
+PAGE_NAMES = ["PANEL", "GAME", "MUSIC", "HID", "SWITCHES", "ENCODER",
               "BUTTONS", "PCF8574", "I2C", "INFO"]
 PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
@@ -154,6 +157,7 @@ class Link:
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
         self.q.put(("info", f"connected to {port}"))
+        self.q.put(("settings", None))   # the board forgets: tell it again
         return True
 
     def disconnect(self):
@@ -373,8 +377,11 @@ class App(tk.Tk):
         self.rate = ttk.Label(top, text="")
         self.rate.pack(side="right")
 
-        body = ttk.Frame(self)
-        body.pack(fill="both", expand=True, **pad)
+        self.tabs = ttk.Notebook(self)
+        self.tabs.pack(fill="both", expand=True, **pad)
+
+        body = ttk.Frame(self.tabs)
+        self.tabs.add(body, text="Panel")
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True, padx=(0, 6))
@@ -472,30 +479,7 @@ class App(tk.Tk):
         ttk.Button(right, text="Send", width=24,
                    command=self._send_entry).pack(padx=6, pady=2)
 
-        ttk.Separator(right).pack(fill="x", pady=8)
-        self.auto_var = tk.BooleanVar(value=autostart.is_enabled())
-        ttk.Checkbutton(right, text="Start at logon", variable=self.auto_var,
-                        command=self._toggle_autostart).pack(padx=6, pady=2)
-
-        self.yield_var = tk.BooleanVar(value=bool(self.cfg.get("yield_outgauge")))
-        ttk.Checkbutton(right, text="Leave OutGauge to CorsaConnect",
-                        variable=self.yield_var,
-                        command=self._toggle_yield).pack(padx=6, pady=2)
-
-        self.uni_var = tk.BooleanVar(value=bool(self.cfg.get("unicode_titles", True)))
-        ttk.Checkbutton(right, text="Titles in their own alphabet",
-                        variable=self.uni_var,
-                        command=self._toggle_unicode).pack(padx=6, pady=2)
-
-        self.inapp_var = tk.BooleanVar(value=bool(self.cfg.get("app_own_volume", True)))
-        ttk.Checkbutton(right, text="Move the app's own volume slider",
-                        variable=self.inapp_var,
-                        command=self._toggle_inapp).pack(padx=6, pady=2)
-
-        self.kar_var = tk.BooleanVar(value=bool(self.cfg.get("karaoke", False)))
-        ttk.Checkbutton(right, text="Karaoke (asks lrclib.net for lyrics)",
-                        variable=self.kar_var,
-                        command=self._toggle_karaoke).pack(padx=6, pady=2)
+        self._build_settings()
 
         logf = ttk.LabelFrame(self, text="Log")
         logf.pack(fill="both", expand=True, **pad)
@@ -562,6 +546,187 @@ class App(tk.Tk):
         self.audio.unicode_titles = on
         self._log("titles: %s" % ("their own alphabet" if on
                                   else "Latin letters, panel font"), "info")
+
+    # ---------------------------------------------------------------- settings
+    def _build_settings(self):
+        """Everything that is a choice rather than a reading.
+
+        The panel tab is what the board is doing right now; this is what you
+        want it to do. They were mixed together in a column of buttons, which
+        is fine for five and useless for twelve.
+        """
+        page = ttk.Frame(self.tabs)
+        self.tabs.add(page, text="Settings")
+        pad = dict(padx=8, pady=5)
+
+        # ---- the rotation
+        rot = ttk.LabelFrame(page, text="Pages on the panel")
+        rot.pack(side="left", fill="y", **pad)
+        ttk.Label(rot, wraplength=300, justify="left",
+                  text="USER walks this list, in this order. A page you never "
+                       "look at is not worth three presses to get past, so take "
+                       "it out.").pack(padx=8, pady=(6, 2), anchor="w")
+
+        cols = ttk.Frame(rot)
+        cols.pack(fill="both", expand=True, padx=8, pady=6)
+
+        shown = ttk.Frame(cols)
+        shown.pack(side="left", fill="y")
+        ttk.Label(shown, text="In the rotation").pack(anchor="w")
+        self.pg_in = tk.Listbox(shown, height=11, width=16, exportselection=False)
+        self.pg_in.pack()
+
+        mid = ttk.Frame(cols)
+        mid.pack(side="left", fill="y", padx=6)
+        ttk.Label(mid, text=" ").pack()
+        for text, fn in (("\u25b2", lambda: self._pg_move(-1)),
+                         ("\u25bc", lambda: self._pg_move(1)),
+                         ("\u2192", self._pg_hide),
+                         ("\u2190", self._pg_show)):
+            ttk.Button(mid, text=text, width=3, command=fn).pack(pady=2)
+
+        hidden = ttk.Frame(cols)
+        hidden.pack(side="left", fill="y")
+        ttk.Label(hidden, text="Not shown").pack(anchor="w")
+        self.pg_out = tk.Listbox(hidden, height=11, width=16, exportselection=False)
+        self.pg_out.pack()
+
+        # ---- the screen
+        scr = ttk.LabelFrame(page, text="Screen")
+        scr.pack(side="left", fill="both", expand=True, **pad)
+
+        ttk.Label(scr, text="Rev counter").pack(anchor="w", padx=8, pady=(6, 0))
+        self.rpm_var = tk.IntVar(value=int(self.cfg.get("rpm_style", 0)))
+        for text, val in (("A bar across the bottom", 0), ("A needle", 1)):
+            ttk.Radiobutton(scr, text=text, variable=self.rpm_var, value=val,
+                            command=self._apply_rpm).pack(anchor="w", padx=20)
+
+        ttk.Separator(scr).pack(fill="x", padx=8, pady=8)
+        ttk.Label(scr, text="I2C speed").pack(anchor="w", padx=8)
+        ttk.Label(scr, wraplength=330, justify="left", foreground="#555",
+                  text="There is no vsync on these modules - they bring out SDA "
+                       "and SCL and nothing else. What you can do is spend less "
+                       "time writing the frame, because the tear is the panel "
+                       "showing a buffer that is half old and half new. Measured "
+                       "on this board: 18.1 ms a frame at 400 kHz, 9.0 ms at 1 "
+                       "MHz. 1 MHz is past what the SSD1306 promises - if yours "
+                       "dislikes it you get rubbish on screen and you come back "
+                       "here.").pack(anchor="w", padx=8, pady=(2, 4))
+        self.i2c_var = tk.IntVar(value=int(self.cfg.get("i2c_khz", 400)))
+        row = ttk.Frame(scr)
+        row.pack(anchor="w", padx=20)
+        for khz in (100, 400, 1000):
+            ttk.Radiobutton(row, text="%d kHz" % khz, variable=self.i2c_var,
+                            value=khz, command=self._apply_i2c).pack(side="left",
+                                                                     padx=(0, 10))
+
+        # ---- the rest
+        opt = ttk.LabelFrame(page, text="Options")
+        opt.pack(side="left", fill="y", **pad)
+        self.auto_var = tk.BooleanVar(value=autostart.is_enabled())
+        ttk.Checkbutton(opt, text="Start at logon", variable=self.auto_var,
+                        command=self._toggle_autostart).pack(anchor="w", padx=8, pady=3)
+        self.yield_var = tk.BooleanVar(value=bool(self.cfg.get("yield_outgauge")))
+        ttk.Checkbutton(opt, text="Leave OutGauge to CorsaConnect",
+                        variable=self.yield_var,
+                        command=self._toggle_yield).pack(anchor="w", padx=8, pady=3)
+        self.uni_var = tk.BooleanVar(value=bool(self.cfg.get("unicode_titles", True)))
+        ttk.Checkbutton(opt, text="Titles in their own alphabet",
+                        variable=self.uni_var,
+                        command=self._toggle_unicode).pack(anchor="w", padx=8, pady=3)
+        self.inapp_var = tk.BooleanVar(value=bool(self.cfg.get("app_own_volume", True)))
+        ttk.Checkbutton(opt, text="Move the app's own volume slider",
+                        variable=self.inapp_var,
+                        command=self._toggle_inapp).pack(anchor="w", padx=8, pady=3)
+        self.kar_var = tk.BooleanVar(value=bool(self.cfg.get("karaoke", False)))
+        ttk.Checkbutton(opt, text="Karaoke (asks lrclib.net for lyrics)",
+                        variable=self.kar_var,
+                        command=self._toggle_karaoke).pack(anchor="w", padx=8, pady=3)
+
+        self._pg_load()
+
+    # ---- the page rotation ----------------------------------------------
+    def _pg_load(self):
+        order = list(self.cfg.get("page_order") or range(len(PAGE_NAMES)))
+        order = [i for i in order if 0 <= i < len(PAGE_NAMES)]
+        rest = [i for i in range(len(PAGE_NAMES)) if i not in order]
+        self.pg_in.delete(0, "end")
+        self.pg_out.delete(0, "end")
+        for i in order:
+            self.pg_in.insert("end", PAGE_NAMES[i])
+        for i in rest:
+            self.pg_out.insert("end", PAGE_NAMES[i])
+        self._pg_ids = (order, rest)
+
+    def _pg_apply(self):
+        order, rest = self._pg_ids
+        self.cfg["page_order"] = order
+        settings.save(self.cfg)
+        if order:
+            self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
+
+    def _pg_move(self, by):
+        sel = self.pg_in.curselection()
+        if not sel:
+            return
+        i = sel[0]
+        order, rest = self._pg_ids
+        j = i + by
+        if not (0 <= j < len(order)):
+            return
+        order[i], order[j] = order[j], order[i]
+        self._pg_refill(sel_in=j)
+
+    def _pg_hide(self):
+        sel = self.pg_in.curselection()
+        order, rest = self._pg_ids
+        if not sel or len(order) < 2:
+            return                      # never leave the panel with no pages
+        rest.append(order.pop(sel[0]))
+        self._pg_refill()
+
+    def _pg_show(self):
+        sel = self.pg_out.curselection()
+        if not sel:
+            return
+        order, rest = self._pg_ids
+        order.append(rest.pop(sel[0]))
+        self._pg_refill(sel_in=len(order) - 1)
+
+    def _pg_refill(self, sel_in=None):
+        order, rest = self._pg_ids
+        self.pg_in.delete(0, "end")
+        self.pg_out.delete(0, "end")
+        for i in order:
+            self.pg_in.insert("end", PAGE_NAMES[i])
+        for i in rest:
+            self.pg_out.insert("end", PAGE_NAMES[i])
+        if sel_in is not None:
+            self.pg_in.selection_set(sel_in)
+            self.pg_in.activate(sel_in)
+        self._pg_apply()
+
+    # ---- the screen ------------------------------------------------------
+    def _apply_rpm(self):
+        v = int(self.rpm_var.get())
+        self.cfg["rpm_style"] = v
+        settings.save(self.cfg)
+        self.link.send("%%rs=%d" % v, echo=False)
+
+    def _apply_i2c(self):
+        v = int(self.i2c_var.get())
+        self.cfg["i2c_khz"] = v
+        settings.save(self.cfg)
+        self.link.send("%%ic=%d" % v, echo=False)
+
+    def push_settings(self):
+        """Send everything the board holds in RAM. Called on every connect,
+        because the board forgets it all when it is unplugged."""
+        order = self.cfg.get("page_order")
+        if order:
+            self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
+        self.link.send("%%rs=%d" % int(self.cfg.get("rpm_style", 0)), echo=False)
+        self.link.send("%%ic=%d" % int(self.cfg.get("i2c_khz", 400)), echo=False)
 
     def _toggle_karaoke(self):
         """Synced lyrics on the KARAOKE page.
@@ -725,6 +890,8 @@ class App(tk.Tk):
                     self._log(payload, "err")
                 elif kind == "info":
                     self._log(payload, "info")
+                elif kind == "settings":
+                    self.push_settings()
                 elif kind == "down":
                     self.link.disconnect()
                     self._set_connected(False)

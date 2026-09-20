@@ -580,6 +580,45 @@ const char *PAGE_NAME[P_COUNT] =
     "I2C", "INFO" };
 
 uint8_t  page       = P_OVERVIEW;
+
+/* ---- which pages, and in what order --------------------------------------
+   The rotation is a LIST, not a count. You walk it with USER, and the app
+   decides what is in it and in which order - a page you never look at is not
+   worth three presses to get past.
+
+   The list lives in RAM and the app sends it on every connect. Nothing is
+   written to flash: the board is useless without the app anyway, and flash
+   wear for a setting that is re-sent in fifty milliseconds is a bad trade. */
+// The rev counter: 0 = the bar across the bottom, 1 = a needle. Set from
+// the app, and read by audParse long before the drawing code exists.
+uint8_t  rpmStyle = 0;
+
+uint8_t  pageList[P_COUNT] = { P_OVERVIEW, P_GAME, P_MUSIC, P_HID, P_SW,
+                               P_ENC, P_BTN, P_PCF, P_I2C, P_INFO };
+uint8_t  pageListN = P_COUNT;
+uint8_t  pageSlot  = 0;          // where we are in that list
+
+// Where a page sits in the list, or -1 if it has been left out of it.
+static int8_t pageSlotOf(uint8_t id) {
+  for (uint8_t i = 0; i < pageListN; i++) if (pageList[i] == id) return (int8_t)i;
+  return -1;
+}
+
+// Step through the list. The list is what wraps, not P_COUNT.
+static void pageStep(int8_t by) {
+  if (!pageListN) return;
+  pageSlot = (uint8_t)((pageSlot + pageListN + by) % pageListN);
+  page = pageList[pageSlot];
+}
+
+// Jump to a page by name, keeping the slot in step so the next USER press
+// carries on from there rather than from wherever it was.
+static void pageGoto(uint8_t id) {
+  int8_t sl = pageSlotOf(id);
+  if (sl < 0) return;            // not in the rotation: leave things alone
+  pageSlot = (uint8_t)sl;
+  page = id;
+}
 int32_t  encValue   = 50;
 int32_t  encTotal   = 0;
 int8_t   encDir     = 0;
@@ -1771,6 +1810,49 @@ void audParse(char *s) {
       tsKind = (uint8_t)(2 + atoi(val));      // 3 = this line, 4 = the next
     } else if (!strcasecmp(key, "ka")) {
       lyrState = (uint8_t)atoi(val);
+    }
+    /* "%pg=1,2,0,3" - the rotation, in order, by page number. Anything left
+       out simply isn't in it. An empty or nonsense list is ignored rather
+       than obeyed: a panel you cannot navigate is worse than one whose order
+       you dislike. */
+    /* "%ic=1000" - the I2C clock in kHz.
+
+       There is no vsync to sync to: these modules bring out SDA and SCL and
+       nothing else, no tearing-effect line. What you can do is spend less time
+       writing the frame, because the tear you see is the panel scanning out a
+       buffer that is half old and half new. Measured on this board a frame
+       takes 15.0 ms at 400 kHz and 7.1 ms at 1 MHz - the window halves. 1 MHz
+       is past what the SSD1306 promises, which is why it is a setting and not
+       the default: if yours doesn't like it the screen fills with rubbish and
+       you set it back. */
+    else if (!strcasecmp(key, "ic")) {
+      uint32_t hz = (uint32_t)atol(val) * 1000UL;
+      if (hz == 100000UL || hz == 400000UL || hz == 1000000UL) {
+        i2cHz = hz;
+        Wire.setClock(i2cHz);
+        tryOledInit();          // the speed comes from the constructor
+      }
+    }
+    else if (!strcasecmp(key, "rs")) {
+      rpmStyle = (atoi(val) == 1) ? 1 : 0;
+    }
+    else if (!strcasecmp(key, "pg")) {
+      uint8_t tmp[P_COUNT], n = 0;
+      bool used[P_COUNT] = { false };
+      for (const char *p = val; *p && n < P_COUNT; ) {
+        int id = atoi(p);
+        if (id >= 0 && id < P_COUNT && !used[id]) { used[id] = true; tmp[n++] = (uint8_t)id; }
+        while (*p && *p != ',') p++;
+        if (*p == ',') p++;
+      }
+      if (n) {
+        uint8_t was = page;
+        memcpy(pageList, tmp, n);
+        pageListN = n;
+        int8_t sl = pageSlotOf(was);
+        pageSlot = (sl >= 0) ? (uint8_t)sl : 0;   // dropped? start at the front
+        page = pageList[pageSlot];
+      }
     } else if (!strcasecmp(key, "at")) {
       tsAt = (int32_t)atol(val);
     } else if (!strcasecmp(key, "w")) {
@@ -2139,7 +2221,7 @@ void usrUpdate() {
 
   if (lastShort && gap < usrDoubleMs) {
     // Second press: step the page back (the first one moved it on) and toggle.
-    page = (uint8_t)((page + P_COUNT - 1) % P_COUNT);
+    pageStep(-1);
     lastShort = 0;
     mediaLayer = !mediaLayer;
     Serial.printf("[usr] double press at %lu ms -> layer = %s\n",
@@ -2157,7 +2239,7 @@ void usrUpdate() {
   // rather than the diagnostic ones: those are what you look at while driving or
   // flying. To get out, disarm.
   if (hidArmed && gameFresh()) {
-    page = P_GAME;
+    pageGoto(P_GAME);
     gameSub = (uint8_t)((gameSub + 1) % gameSubCount());
     return;
   }
@@ -2176,7 +2258,7 @@ void usrUpdate() {
     return;
   }
   musicSub = 0;
-  page = (uint8_t)((page + 1) % P_COUNT);
+  pageStep(1);
 }
 
 
@@ -2569,7 +2651,7 @@ void header(int shift) {
   // navigate the panel from there anyway, and two counters side by side used to
   // overlap (the right-hand block of the header starts at x=72 when HID is
   // armed, right on top of where drawGame drew the second one).
-  unsigned cur = (unsigned)(page + 1), tot = (unsigned)P_COUNT;
+  unsigned cur = (unsigned)(pageSlot + 1), tot = (unsigned)pageListN;
   if (page == P_GAME && gameFresh()) {
     cur = (unsigned)(gameSub + 1);
     tot = (unsigned)gameSubCount();
@@ -2788,6 +2870,51 @@ static void blinkArrow(bool left, bool on) {
                                SCREEN_W - 9, gTop + 13, SSD1306_WHITE);
 }
 
+/* The rev counter as a dial.
+
+   The rim is TICKS, not a drawn arc. An arc of this radius comes out as a
+   smudge of stair-stepped pixels on a screen this small, and ticks give you a
+   scale for the same pixels. Everything past the redline gets a tick of its
+   own length so the danger end reads without needing colour, which there
+   isn't any of. */
+static void drawRpmDial(int16_t cx, int16_t cy, int16_t r) {
+  if (gameRpmMax <= 0) return;
+  bool over = (gameRedline > 0 && gameRpm >= gameRedline);
+
+  // Six ticks, not eleven. Eleven fit geometrically and came out as a ball of
+  // dots: the fan is thirty pixels wide, and a scale you cannot count is worse
+  // than no scale. The ones past the redline are longer, which is the only way
+  // left to mark the danger end when there is no colour.
+  for (uint8_t i = 0; i <= 5; i++) {
+    int32_t at = (int32_t)gameRpmMax * i / 5;
+    bool hot = (gameRedline > 0 && at >= gameRedline);
+    float a = (float)(180 - i * 36) * 0.01745329f;
+    float c = cosf(a), sn = sinf(a);
+    int16_t inner = hot ? (int16_t)(r - 8) : (int16_t)(r - 4);
+    oled->drawLine((int16_t)(cx + c * inner), (int16_t)(cy - sn * inner),
+                   (int16_t)(cx + c * r),     (int16_t)(cy - sn * r),
+                   SSD1306_WHITE);
+  }
+
+  // Over the limiter the needle blinks, the same warning the bar gives by
+  // filling: on one bit per pixel, blinking is the only other voice.
+  if (over && (millis() % 300) < 150) return;
+
+  int32_t rpm = gameRpm;
+  if (rpm < 0) rpm = 0;
+  if (rpm > gameRpmMax) rpm = gameRpmMax;
+  float a = (float)(180.0f - 180.0f * (float)rpm / (float)gameRpmMax) * 0.01745329f;
+  float c = cosf(a), sn = sinf(a);
+  // Two lines a pixel apart, not one: a single-pixel needle at this size
+  // disappears among the ticks. Which pixel to double depends on where it is
+  // pointing - sideways it wants a second row, upright a second column.
+  int16_t tipx = (int16_t)(cx + c * (r - 5)), tipy = (int16_t)(cy - sn * (r - 5));
+  oled->drawLine(cx, cy, tipx, tipy, SSD1306_WHITE);
+  if (sn > 0.7f) oled->drawLine(cx + 1, cy, tipx + 1, tipy, SSD1306_WHITE);
+  else           oled->drawLine(cx, cy - 1, tipx, tipy - 1, SSD1306_WHITE);
+  oled->fillCircle(cx, cy, 2, SSD1306_WHITE);
+}
+
 static void drawRpmBar(int y) {
   const int BH = 6;
   if (gameRpmMax <= 0) return;
@@ -2822,9 +2949,14 @@ static void drawCarPage() {
       oled->setCursor(11, gTop + 1);
       oled->print(gameSpd);
 
-      oled->setTextSize(1);
-      oled->setCursor(11 + 36, gTop + 8);
-      oled->print(F("km/h"));
+      // With the dial there is no room for the unit, and no need for it: a big
+      // number next to a rev counter is the speed. The dial goes in the gap it
+      // leaves, between the speed and the gear.
+      if (rpmStyle != 1) {
+        oled->setTextSize(1);
+        oled->setCursor(11 + 36, gTop + 8);
+        oled->print(F("km/h"));
+      }
 
       oled->setTextSize(2);
       oled->setCursor(98, gTop + 1);
@@ -2833,7 +2965,10 @@ static void drawCarPage() {
       else if (gameGear < 10) oled->print(gameGear);
       else { oled->setTextSize(1); oled->setCursor(98, gTop + 5); oled->print(gameGear); }
 
-      drawRpmBar((oledH >= 64) ? 44 : 26);
+      // The dial goes between the speed and the gear, where the bar was, so
+      // nothing else on the page has to move for it.
+      if (rpmStyle == 1) drawRpmDial(70, (int16_t)(oledH - 1), 15);
+      else               drawRpmBar((oledH >= 64) ? 44 : 26);
       break;
     }
     case 1:
@@ -3685,6 +3820,12 @@ void printHelp() {
   Serial.println(F("    %ky=1|2;at=<ms>;w=<px>;d=<base64>  a sung line and the next,"));
   Serial.println(F("    each with the millisecond it starts - the board switches them"));
   Serial.println(F("    the words are MUSIC's second sub-page: USER walks the two"));
+  Serial.println(F("  PAGES"));
+  Serial.println(F("    %rs=0|1      rev counter: 0 a bar, 1 a needle"));
+  Serial.println(F("    %ic=100|400|1000  I2C kHz. No vsync exists on these"));
+  Serial.println(F("    modules; a faster bus is what shortens the tear."));
+  Serial.println(F("    %pg=1,2,0,3  the rotation, in order, by page number."));
+  Serial.println(F("    Left out = not in it. The report shows it as ORD=."));
   Serial.println(F("    on the MUSIC page - and on the last GAME sub-page - the"));
   Serial.println(F("    B buttons and the knob move the volume WITHOUT HID armed"));
   Serial.println(F("  GAME TELEMETRY"));
@@ -3899,6 +4040,11 @@ void serialReport() {
   // is the first thing to ask when the knob "does nothing".
   Serial.print(F(" PG=")); Serial.print(page);
   Serial.print('.'); Serial.print(gameSub);
+  Serial.print(F(" ORD="));
+  for (uint8_t i = 0; i < pageListN; i++) {
+    if (i) Serial.print(',');
+    Serial.print(pageList[i]);
+  }
   Serial.print(F(" M=")); Serial.print(mediaLayer ? '1' : '0');
   Serial.print(F(" KNOB="));
   if (audioPage())      Serial.print(F("vol"));
@@ -4149,8 +4295,8 @@ void loop() {
 #endif
 
   // --- navigation ---
-  if (tookPress(B_RHT)) page = (uint8_t)((page + 1) % P_COUNT);
-  if (tookPress(B_LFT)) page = (uint8_t)((page + P_COUNT - 1) % P_COUNT);
+  if (tookPress(B_RHT)) pageStep(1);
+  if (tookPress(B_LFT)) pageStep(-1);
 
   if (tookPress(B_UP))  { encValue += 10; if (encValue > ENC_MAX) encValue = ENC_MAX; }
   if (tookPress(B_DWN)) { encValue -= 10; if (encValue < ENC_MIN) encValue = ENC_MIN; }
