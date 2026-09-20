@@ -302,27 +302,36 @@ public class MainActivity extends Activity implements UsbCdc.Listener {
                           | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         host.setBackground(rounded(SURFACE, LINE));
         host.setPadding(dp(10), dp(10), dp(10), dp(10));
-        host.setText(getPreferences(MODE_PRIVATE).getString("relayHost", ""));
+        host.setText(getSharedPreferences(RelayService.PREFS, MODE_PRIVATE)
+                         .getString(RelayService.KEY_HOST, ""));
         host.setLayoutParams(new LinearLayout.LayoutParams(0,
                 LayoutParams.WRAP_CONTENT, 1f));
         relayRow.addView(host);
         relay = new AlarmRelay(this, this::log);
-        relayRow.addView(actionButton("SEND MY ALARMS", v -> {
+        final Button relayBtn = actionButton("SEND MY ALARMS", null, 0f);
+        relayBtn.setOnClickListener(v -> {
             String h = host.getText().toString().trim();
-            getPreferences(MODE_PRIVATE).edit().putString("relayHost", h).apply();
-            if (relay.isRunning()) {
-                relay.stop();
-                log("alarm relay off");
-            } else {
-                relay.start(h);
-                log("alarm relay on - " + h);
+            boolean on = !RelayService.isEnabled(this);
+            if (on && h.isEmpty()) {
+                log("put the app's address in the box first");
+                return;
             }
-        }, 0f));
+            RelayService.enable(this, h, on);
+            relayBtn.setText(on ? "RELAYING" : "SEND MY ALARMS");
+            paintMode(relayBtn, on);
+            log(on ? "alarm relay on - " + h : "alarm relay off");
+            if (on) relay.start(h);        // and say it once, straight away
+        });
+        relayBtn.setText(RelayService.isEnabled(this) ? "RELAYING"
+                                                      : "SEND MY ALARMS");
+        paintMode(relayBtn, RelayService.isEnabled(this));
+        relayRow.addView(relayBtn);
         col.addView(relayRow);
-        col.addView(label("The app's Settings tab shows the address, next to "
-                          + "\"Take alarms from the phone\". Only the next "
-                          + "alarm's time and who set it leave this phone.",
-                          12, MUTED));
+        col.addView(label("It keeps going with this app closed - that is what "
+                          + "the notification is for. Android only tells a "
+                          + "running process that an alarm has changed. Only "
+                          + "the next alarm's time and who set it leave this "
+                          + "phone.", 12, MUTED));
 
         col.addView(heading("Source"));
         LinearLayout modes = new LinearLayout(this);

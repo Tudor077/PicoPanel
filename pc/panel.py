@@ -742,6 +742,7 @@ class App(tk.Tk):
         if self.phone_var.get():
             self._toggle_phone()
         self._alarm_done = {}
+        self._had_alarm = False
         self.after(3000, self._alarm_tick)
 
         self._pg_load()
@@ -792,8 +793,11 @@ class App(tk.Tk):
         order = self._pg_ids[0]
         where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
         # The third number is where the board's own header has slid to, so
-        # yours slides with it and goes away when the panel goes quiet.
-        return (self.page_name(pg), where, self.link.board_hdr)
+        # yours slides with it and goes away when the panel goes quiet. The
+        # fourth is the countdown, which does NOT go away with it: the board
+        # keeps showing it on its own pages too.
+        return (self.page_name(pg), where, self.link.board_hdr,
+                self.alarm_badge())
 
     def slot_of(self, pg):
         """Which of the pages you draw yourself this is, or None."""
@@ -980,6 +984,21 @@ class App(tk.Tk):
             best = p
         return best
 
+    def alarm_badge(self):
+        """"6h12" or "12:34" - what the header shows, or "" for no alarm.
+
+        The same shape the firmware draws for its own pages, because the two
+        sit on the same screen a page apart and a countdown that changed style
+        halfway round the rotation would look like two different things.
+        """
+        nxt = self.next_alarm()
+        if not nxt:
+            return ""
+        left = int(nxt[0])
+        if left >= 3600:
+            return "%dh%02d" % (left // 3600, (left % 3600) // 60)
+        return "%d:%02d" % (left // 60, left % 60)
+
     def _alarms(self):
         a = self.cfg.get("alarms")
         return a if isinstance(a, list) else []
@@ -1053,6 +1072,23 @@ class App(tk.Tk):
         that, and a screen flashing every three seconds for a minute is not
         what anybody meant.
         """
+        # The board counts down in its own header, on every page - so it is
+        # told how long is left, rather than having to be on the right page to
+        # show it. Every few seconds is plenty: it counts the rest off itself.
+        try:
+            nxt = self.next_alarm()
+            if self.link.open:
+                from telemetry import text as T
+                if nxt:
+                    self.link.send("%%na=%d,%s"
+                                   % (int(nxt[0]), T.clean(T.translit(nxt[1]), 16)),
+                                   echo=False)
+                elif self._had_alarm:
+                    self.link.send("%na=", echo=False)
+            self._had_alarm = bool(nxt)
+        except Exception as e:
+            self._log("could not tell the board about the alarm: %s" % e, "err")
+
         try:
             # The phone's, when it comes due. Once - the bridge forgets it as
             # soon as it has been rung, so it cannot fire twice.
@@ -1237,6 +1273,7 @@ class App(tk.Tk):
         if order:
             self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
         self.link.send("%%rs=%d" % int(self.cfg.get("rpm_style", 0)), echo=False)
+        self._had_alarm = False     # so the next tick tells it either way
         self.link.send("%%ic=%d" % int(self.cfg.get("i2c_khz", 400)), echo=False)
 
     def _toggle_karaoke(self):

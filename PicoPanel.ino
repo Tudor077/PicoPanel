@@ -636,6 +636,13 @@ uint8_t  rpmStyle = 0;
 uint32_t alarmUntil = 0;
 char     alarmText[24] = "";
 
+/* The NEXT alarm, so the header can count down to it on every page. The app
+   says how many seconds are left ("%na=5400,WORK"); the board counts them off
+   itself, so the display is smooth and survives the app being busy. 0 = none
+   pending, and then nothing is drawn at all. */
+uint32_t alarmDueAt = 0;        // millis() when it is due
+char     alarmWhat[20] = "";
+
 // The spare custom pages start out of the rotation: seven blank pages in
 // everyone's way would be a worse default than none. The app puts them in as
 // you make them.
@@ -1919,6 +1926,18 @@ void audParse(char *s) {
       Serial.print(F(" ms "));
       Serial.println(alarmText);
     }
+    /* "%na=5400,WORK" - the next alarm, in seconds from now. "%na=" alone,
+       or a negative number, means there isn't one. */
+    else if (!strcasecmp(key, "na")) {
+      long secs = strtol(val, NULL, 10);
+      const char *comma = strchr(val, ',');
+      alarmWhat[0] = 0;
+      if (comma) {
+        strncpy(alarmWhat, comma + 1, sizeof(alarmWhat) - 1);
+        alarmWhat[sizeof(alarmWhat) - 1] = 0;
+      }
+      alarmDueAt = (secs > 0) ? (millis() + (uint32_t)secs * 1000UL) : 0;
+    }
     else if (!strcasecmp(key, "gs")) {
       uint8_t n = (uint8_t)atoi(val);
       if (n < gameSubCount()) gameSub = n;
@@ -2797,13 +2816,39 @@ static void alarmOverlay() {
   }
 }
 
+/* A bell, five pixels wide. The panel's font has no such glyph and a second
+   font for one picture would be absurd. */
+static void drawBell(int x, int y, uint16_t colour) {
+  oled->drawLine(x + 1, y, x + 3, y, colour);
+  oled->drawLine(x, y + 1, x, y + 4, colour);
+  oled->drawLine(x + 4, y + 1, x + 4, y + 4, colour);
+  oled->drawLine(x - 1, y + 5, x + 5, y + 5, colour);
+  oled->drawPixel(x + 2, y + 6, colour);
+}
+
+// How long until the next alarm, as "6h12" or "12:34", or false if there is
+// none. Counted off the board's own clock between the app's updates.
+static bool alarmLeft(char *out, size_t n) {
+  if (!alarmDueAt) return false;
+  int32_t ms = (int32_t)(alarmDueAt - millis());
+  if (ms <= 0) { alarmDueAt = 0; return false; }
+  uint32_t secs = (uint32_t)ms / 1000UL;
+  if (secs >= 3600UL)
+    snprintf(out, n, "%luh%02lu", (unsigned long)(secs / 3600UL),
+             (unsigned long)((secs % 3600UL) / 60UL));
+  else
+    snprintf(out, n, "%lu:%02lu", (unsigned long)(secs / 60UL),
+             (unsigned long)(secs % 60UL));
+  return true;
+}
+
 void header(int shift) {
   int h = 9 - shift;
   if (h > 0) oled->fillRect(0, 0, SCREEN_W, h, SSD1306_WHITE);
   oled->setTextSize(1);            // never inherited from the previous page
   oled->setTextColor(SSD1306_BLACK);
-  oled->setCursor(2, 1 - shift);
-  oled->print(PAGE_NAME[page]);
+  // The name is written LAST, once we know what room is left - see below.
+  int nameX = 2, nameRoom = SCREEN_W;
   // The latched layer shows in the header on every page: if it stays on and you
   // can't see it, you press a button and wonder why it skipped a track.
   const char *hidMark = "";
@@ -2825,8 +2870,51 @@ void header(int shift) {
   char buf[16];
   snprintf(buf, sizeof(buf), "%s%s%u/%u", hidMark, mediaLayer ? "M " : "",
            cur, tot);
-  oled->setCursor(SCREEN_W - 2 - 6 * (int)strlen(buf), 1 - shift);
+  // The badge sits at the far right whether this bar is here or not, so the
+  // counter moves left to make room for it.
+  char left[10];
+  int reserve = alarmLeft(left, sizeof(left)) ? (6 * (int)strlen(left) + 14) : 0;
+  int right = SCREEN_W - 2 - 6 * (int)strlen(buf) - reserve;
+  oled->setCursor(right, 1 - shift);
   oled->print(buf);
+
+  // Whatever is left over goes to the name, and the name is what gets cut.
+  // With HID armed and an alarm pending there is not room for all three, and
+  // of the three the name is the one you already know: it is the page you are
+  // looking at, and the app says so as well.
+  nameRoom = (right - 2 - nameX) / 6;
+  if (nameRoom > 0) {
+    char nm[20];
+    strncpy(nm, PAGE_NAME[page], sizeof(nm) - 1);
+    nm[sizeof(nm) - 1] = 0;
+    if ((int)strlen(nm) > nameRoom) nm[nameRoom] = 0;
+    oled->setCursor(nameX, 1 - shift);
+    oled->print(nm);
+  }
+  oled->setTextColor(SSD1306_WHITE);
+}
+
+/* How long until the next alarm, top right, on every page and whether or not
+   the header is still there. When the bar is up it is black on white like the
+   rest of it; when the bar has slid away it is white on the page - because
+   "after twenty idle seconds" is exactly when you want to see it. */
+static void alarmBadge(uint8_t shift) {
+  char left[10];
+  if (!alarmLeft(left, sizeof(left))) return;
+  bool onBar = (shift < 9);
+  uint16_t ink = onBar ? SSD1306_BLACK : SSD1306_WHITE;
+  int y = onBar ? (1 - (int)shift) : 0;
+  int x = SCREEN_W - 2 - 6 * (int)strlen(left);
+  if (!onBar) {
+    // Nothing behind it now, so it needs its own dark ground or it lands on
+    // top of whatever the page drew there.
+    oled->fillRect(x - 10, y, SCREEN_W - x + 10, 8, SSD1306_BLACK);
+  }
+  drawBell(x - 8, y + 1, ink);
+  oled->setTextSize(1);
+  oled->setTextColor(ink);
+  oled->setCursor(x, y);
+  oled->print(left);
   oled->setTextColor(SSD1306_WHITE);
 }
 
@@ -3510,6 +3598,9 @@ void render() {
   //
   // The cycle keeps turning either way, so coming back to the game page does
   // not find it parked where you left it.
+  // After the page has drawn, so nothing covers it - and not on a page the
+  // PC draws, because that one arrives as a whole picture with its own.
+  if (cusSlotOf(page) < 0) alarmBadge(hdrShift);
   alarmOverlay();
   burnService();
   bool burnHere = (page == P_GAME && gameFresh());
@@ -3998,6 +4089,8 @@ void printHelp() {
   Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..8"));
   Serial.println(F("    %gs=n %ms=n   which sub-page of GAME / MUSIC"));
   Serial.println(F("    %fl=<ms>,<text>  flash the screen - the app's alarms"));
+  Serial.println(F("    %na=<secs>,<what> the next alarm, counted down in the"));
+  Serial.println(F("    header on every page. No number: there isn't one."));
   Serial.println(F("    The board says '!PAGE n sub subs' on every change, so"));
   Serial.println(F("    the app knows when to send them - and what to walk."));
   Serial.println(F("    %gp=3        show that page now (the app's preview)"));

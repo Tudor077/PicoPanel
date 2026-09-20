@@ -453,7 +453,13 @@ GET  /next     -> {"in_s": 5400, "text": "Work"}
 ```
 
 The Pocket app on the phone does this by itself: **SEND MY ALARMS**, with the
-address in the box. Android hands out the next alarm through
+address in the box. It keeps relaying with the app closed, which is the whole
+point - the panel is on the desk and the phone is in a pocket. That costs a
+notification, and there is no way around it: Android tells any app when the
+next alarm changes, but since Android 8 only one that is already running, and
+an app with nothing running cannot be told anything. It also pushes every
+fifteen minutes in case a broadcast was missed, and starts itself again after
+a reboot. Android hands out the next alarm through
 `AlarmManager.getNextAlarmClock()` - no permission, no notification access - so
 what leaves the phone is one timestamp and the name of the app that set it.
 
@@ -528,6 +534,16 @@ through the mirror and comparing: identical, byte for byte.
 **Alarm in** is the one widget that hides itself. With nothing pending it draws
 no pixels at all, so the page simply does not have it; in the editor it always
 shows, because a widget you cannot see is a widget you cannot place.
+
+You do not need it, though: **the countdown is in the header of every page
+already**, a bell and the time left at the top right. It stays when the header
+retracts, in white on the page instead of black on the bar - twenty idle
+seconds is exactly when you want to know how long you have. The board draws it
+for its own pages and counts the seconds off itself between updates; the app
+draws the same thing, in the same shape, for yours. With HID armed and an alarm
+pending there is not room for all three things up there, and the page's name is
+the one that gets cut: it is the page you are looking at, and the app says so
+as well.
 
 The shelf says what each one is in a line, when the pointer is over it. That is
 there because "Lamp" told nobody anything.

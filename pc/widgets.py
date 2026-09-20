@@ -490,19 +490,14 @@ def _alarm_parts(w, data):
 def _d_alarm(d, w, data):
     """A bell and how long until it goes off.
 
-    The bell is drawn rather than written because the panel's font has no such
-    glyph, and six lines are cheaper than a second font.
+    The same countdown the header carries, for when you want it somewhere
+    else on a page of your own - bigger, or next to something.
     """
     txt, show = _alarm_parts(w, data)
     if not show:
         return
-    x, y = w.x, w.y
-    d.arc([x, y + 1, x + 6, y + 9], 180, 360, fill=1)
-    d.line([x, y + 5, x, y + 7], fill=1)
-    d.line([x + 6, y + 5, x + 6, y + 7], fill=1)
-    d.line([x - 1, y + 7, x + 7, y + 7], fill=1)
-    d.point((x + 3, y + 9), fill=1)
-    d.text((x + 10, y), txt, font=_font(w.size), fill=1)
+    bell(d, w.x + 1, w.y + 1, 1)
+    d.text((w.x + 10, w.y - 1), txt, font=_font(w.size), fill=1)
 
 
 def _d_box(d, w, data):
@@ -585,7 +580,17 @@ ABOUT = {
 HEADER_H = 9            # the same nine rows the board's own header uses
 
 
-def header_bar(d, text, right="", shift=0):
+def bell(d, x, y, fill=1):
+    """Five pixels wide, drawn rather than written: the panel's font has no
+    such glyph and a second font for one picture would be absurd."""
+    d.line([x + 1, y, x + 3, y], fill=fill)
+    d.line([x, y + 1, x, y + 4], fill=fill)
+    d.line([x + 4, y + 1, x + 4, y + 4], fill=fill)
+    d.line([x - 1, y + 5, x + 5, y + 5], fill=fill)
+    d.point((x + 2, y + 6), fill=fill)
+
+
+def header_bar(d, text, right="", shift=0, alarm=""):
     """The board's header, drawn here: a white bar, black text, the name on
     the left and the counter on the right.
 
@@ -594,17 +599,32 @@ def header_bar(d, text, right="", shift=0):
     in Tahoma 9, which is what the panel's Cyrillic titles already use and sits
     beside the board's own text without looking like a different machine.
     """
-    if shift >= HEADER_H:
-        return                       # slid away entirely; nothing to draw
     f = _font(9)
-    d.rectangle([0, -shift, W - 1, HEADER_H - 1 - shift], fill=1)
-    d.text((2, -1 - shift), text, font=f, fill=0)
-    if right:
+
+    def wide(t):
         try:
-            wpx = d.textlength(right, font=f)
+            return d.textlength(t, font=f)
         except Exception:
-            wpx = 6 * len(right)
-        d.text((W - 2 - wpx, -1 - shift), right, font=f, fill=0)
+            return 6 * len(t)
+
+    # The countdown sits at the far right whether the bar is there or not: the
+    # bar retracts after twenty idle seconds, which is exactly when you want to
+    # see how long you have. Black on the bar, white on the page without it.
+    on_bar = shift < HEADER_H
+    if on_bar:
+        d.rectangle([0, -shift, W - 1, HEADER_H - 1 - shift], fill=1)
+        d.text((2, -1 - shift), text, font=f, fill=0)
+    reserve = (wide(alarm) + 14) if alarm else 0
+    if right and on_bar:
+        d.text((W - 2 - wide(right) - reserve, -1 - shift), right, font=f, fill=0)
+    if alarm:
+        ink = 0 if on_bar else 1
+        y = -shift if on_bar else 0
+        x = W - 2 - wide(alarm)
+        if not on_bar:
+            d.rectangle([x - 10, y, W - 1, y + 8], fill=0)
+        bell(d, x - 8, y + 1, ink)
+        d.text((x, y - 1), alarm, font=f, fill=ink)
 
 
 def measure(w, data):
@@ -636,9 +656,11 @@ def measure(w, data):
 def render(widgets, data, header=None):
     """The whole 128x32 page as a PIL image, or None without PIL.
 
-    `header` is ("NAME", "3/11", shift) to put the board's own header bar on
-    top - shift being how far it has slid away, which the board reports so
-    yours retracts with its own. None means the whole screen is yours. The widgets are drawn AFTER it, so a layout
+    `header` is ("NAME", "3/11", shift, "6h12") to put the board's own header
+    bar on top - shift being how far it has slid away, which the board reports
+    so yours retracts with its own, and the last being the countdown to the
+    next alarm, which stays after the bar has gone. None means the whole screen
+    is yours. The widgets are drawn AFTER it, so a layout
     made before the header existed still shows rather than disappearing under
     a bar nobody has moved it out of yet.
     """
@@ -650,7 +672,8 @@ def render(widgets, data, header=None):
     if header:
         try:
             header_bar(d, header[0], header[1] if len(header) > 1 else "",
-                       header[2] if len(header) > 2 else 0)
+                       header[2] if len(header) > 2 else 0,
+                       header[3] if len(header) > 3 else "")
         except Exception:
             pass
     for w in widgets:
