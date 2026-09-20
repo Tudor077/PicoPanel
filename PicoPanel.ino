@@ -3198,8 +3198,16 @@ void render() {
       break;
     case P_GAME:     drawGame();     break;
   }
+  // Only on the game page. That is the one held lit for hours, so it is the
+  // only one with anything to burn - everywhere else the panel goes dark after
+  // twenty idle seconds. And a picture that twitches by a pixel while you are
+  // reading it just looks broken.
+  //
+  // The cycle keeps turning either way, so coming back to the game page does
+  // not find it parked where you left it.
   burnService();
-  frameShift(burnX, burnY);          // after everything, before it is sent
+  bool burnHere = (page == P_GAME && gameFresh());
+  frameShift(burnHere ? burnX : 0, burnHere ? burnY : 0);
   oled->display();
   mirrorCapture();                   // hand core0 a frame that's actually done
   renderUs = micros() - t0;

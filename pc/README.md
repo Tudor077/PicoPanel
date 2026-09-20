@@ -330,12 +330,18 @@ Until you tick it, nothing leaves the machine and the page says so.
 An OLED wears out the pixels that are lit, and this panel draws the same header
 in the same place for hours. Three things guard against it.
 
-**The picture moves.** Every two minutes the whole frame shifts by a pixel,
-round a three-by-three grid, the way a television shifts its logo. It is done to
-the finished frame rather than to the drawing code - every page would otherwise
-have to know about it, and one that forgot would sit still while the rest moved.
-The pixel that falls off an edge is always the end of the header bar or blank
-space, never anything you read.
+**The picture moves, on the GAME page.** Every two minutes the whole frame
+shifts by a pixel, round a three-by-three grid, the way a television shifts its
+logo. It is done to the finished frame rather than to the drawing code - every
+page would otherwise have to know about it, and one that forgot would sit still
+while the rest moved. The pixel that falls off an edge is always the end of the
+header bar or blank space, never anything you read.
+
+Only on that page, because it is the only one held lit for hours; everywhere
+else the panel goes dark after twenty idle seconds and there is nothing to burn.
+A picture that twitches by a pixel while you are reading it just looks broken.
+The cycle keeps turning either way, so coming back to the game page does not
+find it parked where you left it.
 
 **It sleeps unless you are looking.** Telemetry arriving used to hold the panel
 lit whatever page was showing, so a game running in the background kept the
