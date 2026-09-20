@@ -348,11 +348,13 @@ def _axis(data, key):
 
 
 def _d_dz(d, w, data):
-    """Two axes at once: a box, the middle, and where you actually are.
+    """Two axes at once: where you are, and whether you are dead centre.
 
-    One bit per pixel, so "in the middle" cannot be a colour. The middle box
-    FILLS when you are inside it and the dot goes hollow - a state you can read
-    across a desk, instead of counting pixels against a crosshair.
+    No deadzone: the tolerance is one pixel, the smallest this screen has. Each
+    axis answers for itself - the vertical line appears when X is centred, the
+    horizontal when Y is - so being centred in one and not the other is a thing
+    you can see rather than a box you are somewhere inside. Both, and it is a
+    full crosshair.
     """
     x0, y0 = w.x, w.y
     x1, y1 = w.x + w.w - 1, w.y + w.h - 1
@@ -366,22 +368,18 @@ def _d_dz(d, w, data):
     d.line([x0 + 1, cy, x0 + 2, cy], fill=1)
     d.line([x1 - 2, cy, x1 - 1, cy], fill=1)
 
-    dz = float(w.opts.get("dz", 0.18))
-    dx = max(1.0, (w.w / 2.0 - 2) * dz)
-    dy = max(1.0, (w.h / 2.0 - 2) * dz)
     ax = _axis(data, w.field)
     ay = _axis(data, w.field_y)
-    home = abs(ax) <= dz and abs(ay) <= dz
-    if home:
-        # Inside: the middle goes solid and there is no separate dot. A dot
-        # drawn on top of a filled box punches a hole in it, and a hole in a
-        # box looks exactly like an empty box - the two states have to differ
-        # at a glance, which is the entire job of this widget.
-        d.rectangle([cx - dx, cy - dy, cx + dx, cy + dy], fill=1, outline=1)
-        return
-    d.rectangle([cx - dx, cy - dy, cx + dx, cy + dy], outline=1)
     px = cx + ax * (w.w / 2.0 - 2)
     py = cy + ay * (w.h / 2.0 - 2)
+
+    # One pixel, which is as fine as this screen gets: the dot has to land on
+    # the same pixel as the middle, not merely near it.
+    if round(px) == round(cx):
+        d.line([cx, y0 + 3, cx, y1 - 3], fill=1)
+    if round(py) == round(cy):
+        d.line([x0 + 3, cy, x1 - 3, cy], fill=1)
+
     d.rectangle([px - 1, py - 1, px + 1, py + 1], fill=1, outline=1)
 
 
@@ -566,7 +564,7 @@ ABOUT = {
     "lamp": "a dot that lights while the field is not zero - brake, HID",
     "box": "an empty frame, for grouping",
     "line": "a rule, for dividing",
-    "axis": "two axes at once, with the deadzone marked",
+    "axis": "two axes at once - the axis line shows when you are dead centre",
     "btn": "one button of the panel, lit while it is held",
     "btnrow": "all eight expander buttons, as the PANEL page has them",
     "knob": "the encoder, as a knob with a mark",

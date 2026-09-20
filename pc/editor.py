@@ -224,8 +224,8 @@ class Editor(ttk.Frame):
         self.fy_box.pack(side="left", padx=4)
         self.fy_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
         ttk.Label(self.row2, foreground="#666",
-                  text="middle box = the deadzone; it fills when you are in it"
-                  ).pack(side="left", padx=10)
+                  text="the axis line shows when that one is dead centre, to "
+                       "the pixel").pack(side="left", padx=10)
 
         self.spins = {}
 

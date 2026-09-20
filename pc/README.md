@@ -467,6 +467,11 @@ Off by default, and it binds to the LAN: there is no account and no password,
 and the worst anybody on your wifi can do with it is flash the panel on your
 desk. The soonest of the two lists wins, whichever it came from.
 
+**A changed header types itself in.** Rename a page and the new name lands a
+letter at a time on the panel, the way the board writes PANEL at boot, and so
+does the alarm countdown when it first appears. Same rate as the splash: two
+things typing at two speeds on one screen would look like two machines.
+
 **Each page has a name and a header.** The board calls the slot `MINE 3` and
 always will - the name lives in the picture the app sends, so it is the app's
 to keep. With the header on, the page wears the same bar the board's own pages
@@ -523,7 +528,7 @@ through the mirror and comparing: identical, byte for byte.
 | Needle | a dial, ticks rather than an arc |
 | Lamp | a dot that lights while the field is not zero - brake, HID, playing |
 | Frame / Line | for dividing things up |
-| Axis | two axes at once: a box, a deadzone, and where you are in it |
+| Axis | two axes at once, with the centre line lit when you are dead on it |
 | Button | one button of the panel, by name, lit while it is held |
 | Button row | all eight expander buttons, as the PANEL page has them |
 | Knob | the encoder, as a knob with a mark |
@@ -555,11 +560,15 @@ telemetry, it is a choice - so they get a **Which** dropdown instead of
 **The clock has a shape.** 24-hour, 12-hour, seconds, the date, the weekday, or
 the date and time together.
 
-**Axis** is the one widget that reads two fields - it grows a second row
-in the properties, for the up/down axis. The middle box is the deadzone: it
-FILLS when you are inside it and the dot disappears, because a dot drawn on top
-of a filled box punches a hole in it and a hole looks exactly like an empty box.
-Solid middle means centred; hollow middle with a dot somewhere means it is not.
+**Axis** is the one widget that reads two fields - it grows a second row in
+the properties, for the up/down axis.
+
+There is no deadzone: the tolerance is one pixel, the smallest this screen has.
+Each axis answers for itself - the vertical line lights when X is dead centre,
+the horizontal when Y is - so being centred in one and not the other is a thing
+you can see, rather than a box you are somewhere inside. Both, and it is a full
+crosshair. A first version had a deadzone box that filled, which made a wheel
+look centred when it was nowhere near.
 
 The panel's own state is all there too - the buttons, both switches, the
 encoder, the frame rate, whether HID is armed - because the board reports every

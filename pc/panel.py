@@ -385,6 +385,7 @@ class App(tk.Tk):
         self.tel_time = time.time()
         self.last_send = 0.0
         self._fb_seq = 0        # frames arrived, so the walk can wait for new ones
+        self._typing = {}       # header text that is still arriving
         self.hold_until = 0.0   # don't reconnect before this
         self.tray = None
 
@@ -792,12 +793,36 @@ class App(tk.Tk):
         pg = CUSTOM_FIRST + slot
         order = self._pg_ids[0]
         where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
+        name = self._typed("n%d" % slot, self.page_name(pg))
+        badge = self._typed("a%d" % slot, self.alarm_badge())
         # The third number is where the board's own header has slid to, so
         # yours slides with it and goes away when the panel goes quiet. The
         # fourth is the countdown, which does NOT go away with it: the board
         # keeps showing it on its own pages too.
-        return (self.page_name(pg), where, self.link.board_hdr,
-                self.alarm_badge())
+        return (name, where, self.link.board_hdr, badge)
+
+    # How fast the letters land. The board's splash types "PANEL" at about
+    # this rate, and two things typing at two speeds on one screen would look
+    # like two different machines.
+    TYPE_S = 0.06
+
+    def _typed(self, key, text):
+        """That string, revealed a letter at a time when it CHANGES.
+
+        Rename a page and the new name types itself onto the panel rather than
+        blinking into existence - the same way the board writes PANEL at boot.
+        Anything that has finished arriving is returned whole, so this costs
+        nothing once it has.
+        """
+        st = self._typing.get(key)
+        now = time.time()
+        if st is None or st[0] != text:
+            st = (text, now)
+            self._typing[key] = st
+        if not text:
+            return text
+        shown = int((now - st[1]) / self.TYPE_S)
+        return text if shown >= len(text) else text[:shown]
 
     def slot_of(self, pg):
         """Which of the pages you draw yourself this is, or None."""
