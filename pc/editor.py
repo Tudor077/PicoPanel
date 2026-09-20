@@ -14,6 +14,7 @@ import io
 import tkinter as tk
 from tkinter import ttk
 
+import theme
 import widgets as WG
 
 ZOOM = 4
@@ -90,7 +91,7 @@ class Editor(ttk.Frame):
         # names, not stacked under them in a row that runs off the window.
         shelf = ttk.LabelFrame(body, text="Widgets")
         shelf.pack(side="left", fill="y", padx=8, pady=8)
-        ttk.Label(shelf, foreground="#666", wraplength=150, justify="left",
+        ttk.Label(shelf, style="Hint.TLabel", wraplength=150, justify="left",
                   text="Pick one up and drop it on the screen."
                   ).pack(anchor="w", padx=6, pady=(4, 6))
         # What it IS, in one line, when the pointer is over it. "Lamp" told
@@ -106,8 +107,8 @@ class Editor(ttk.Frame):
                 self._icons.append(img)       # a PhotoImage nothing holds is
             except Exception:                 # collected, and the row goes blank
                 img = None
-            lab = tk.Label(row, image=img, bd=1, relief="solid", bg="#0a0c0e",
-                           cursor="hand2")
+            lab = tk.Label(row, image=img, bd=1, relief="solid",
+                           bg=theme.PAL["screen"], cursor="hand2")
             lab.pack(side="left")
             ttk.Label(row, text=label).pack(side="left", padx=6)
             for wdg in (lab, row):
@@ -119,7 +120,7 @@ class Editor(ttk.Frame):
                 wdg.bind("<B1-Motion>", self._haul)
                 wdg.bind("<ButtonRelease-1>", self._drop)
 
-        ttk.Label(shelf, textvariable=self.about, foreground="#8a7",
+        ttk.Label(shelf, textvariable=self.about, foreground=theme.PAL["ok"],
                   wraplength=150, justify="left"
                   ).pack(anchor="w", padx=6, pady=(8, 4))
 
@@ -140,21 +141,22 @@ class Editor(ttk.Frame):
         self.hdr_var = tk.BooleanVar(value=self.app.header_of(self.slot))
         ttk.Checkbutton(top, text="Header bar", variable=self.hdr_var,
                         command=self._toggle_header).pack(side="left", padx=8)
-        ttk.Label(top, foreground="#666",
+        ttk.Label(top, style="Hint.TLabel",
                   text="the name and the page counter, in the board's own nine "
                        "rows").pack(side="left")
         self.grid_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(top, text="Grid", variable=self.grid_var
                         ).pack(side="right")
 
-        self.canvas = tk.Canvas(right, width=CW, height=CH, bg="#0a0c0e",
-                                highlightthickness=1, highlightbackground="#555")
+        self.canvas = tk.Canvas(right, width=CW, height=CH,
+                                bg=theme.PAL["screen"], highlightthickness=1,
+                                highlightbackground=theme.PAL["line"])
         self.canvas.pack(padx=8)
         self.canvas.bind("<Button-1>", self._down)
         self.canvas.bind("<B1-Motion>", self._move)
         self.canvas.bind("<ButtonRelease-1>", self._up)
 
-        ttk.Label(right, foreground="#555", wraplength=CW, justify="left",
+        ttk.Label(right, style="Hint.TLabel", wraplength=CW, justify="left",
                   text="This preview is the picture the panel gets, drawn by "
                        "the same code - it cannot drift. The page is sent only "
                        "while the board is showing it."
@@ -223,7 +225,7 @@ class Editor(ttk.Frame):
                                    state="readonly", values=[])
         self.fy_box.pack(side="left", padx=4)
         self.fy_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
-        ttk.Label(self.row2, foreground="#666",
+        ttk.Label(self.row2, style="Hint.TLabel",
                   text="the axis line shows when that one is dead centre, to "
                        "the pixel").pack(side="left", padx=10)
 
@@ -280,7 +282,7 @@ class Editor(ttk.Frame):
             win = tk.Toplevel(self)        # there is no window to leave behind
             win.overrideredirect(True)
             win.attributes("-topmost", True)
-            tk.Label(win, image=img, bd=0, bg="#0a0c0e").pack()
+            tk.Label(win, image=img, bd=0, bg=theme.PAL["screen"]).pack()
             self._ghost_img = img
             self._ghost = win
             self._haul(ev)

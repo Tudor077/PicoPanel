@@ -25,9 +25,12 @@ SHOT_W, SHOT_H = 128 * SHOT_SCALE, 32 * SHOT_SCALE
 # new page and not the tail of the old one.
 SETTLE_MS = 130
 
-BG = "#1b1e24"
-CARD = "#20242c"
-DIM = "#8b93a1"
+import theme
+
+# The cards' own colours, which are now the whole app's - see theme.py.
+BG = theme.PAL["panel"]
+CARD = theme.PAL["card"]
+DIM = theme.PAL["dim"]
 
 
 def frame_photo(w, h, data, scale=SHOT_SCALE):
@@ -43,7 +46,7 @@ def frame_photo(w, h, data, scale=SHOT_SCALE):
     for y in range(h):
         base, bit = (y >> 3) * w, 1 << (y & 7)
         rows.append("{" + " ".join(
-            "#d8f4ff" if data[base + x] & bit else "#0a0c0e"
+            "#d8f4ff" if data[base + x] & bit else theme.PAL["screen"]
             for x in range(w)) + "}")
     img = tk.PhotoImage(width=w, height=h)
     img.put(" ".join(rows))
@@ -115,7 +118,7 @@ class PageList(ttk.Frame):
         """
         if self._blank is None:
             img = tk.PhotoImage(width=SHOT_W, height=SHOT_H)
-            img.put("#0a0c0e", to=(0, 0, SHOT_W, SHOT_H))
+            img.put(theme.PAL["screen"], to=(0, 0, SHOT_W, SHOT_H))
             self._blank = img
         return self._blank
 
@@ -161,7 +164,7 @@ class PageList(ttk.Frame):
             row.pack(fill="x", padx=(34, 4), pady=(0, 3))
             tk.Label(row, text="↳", bg=CARD, fg=DIM,
                      font=("", 9)).pack(side="left", padx=(6, 2))
-            pic = tk.Label(row, image=small, bg="#0a0c0e", bd=0)
+            pic = tk.Label(row, image=small, bg=theme.PAL["screen"], bd=0)
             pic.pack(side="left", padx=4, pady=3)
             tk.Label(row, text="%s - %d of %d" % (self.app.page_name(pg),
                                                   sub + 1, n),
@@ -187,7 +190,7 @@ class PageList(ttk.Frame):
         grip.pack(side="left", padx=(4, 2))
 
         pic = tk.Label(card, image=self.shots.get((pg, 0)) or self._blank_shot(),
-                       bg="#0a0c0e", bd=0)
+                       bg=theme.PAL["screen"], bd=0)
         pic.pack(side="left", padx=4, pady=4)
 
         # The buttons take their room BEFORE the text does. Pack hands out
@@ -199,17 +202,17 @@ class PageList(ttk.Frame):
 
         side = tk.Frame(card, bg=CARD)
         side.pack(side="left", fill="both", expand=True, padx=6)
-        tk.Label(side, text=name, bg=CARD, fg="#e6e8ec" if inside else DIM,
+        tk.Label(side, text=name, bg=CARD, fg=theme.PAL["ink"] if inside else DIM,
                  font=("", 10, "bold")).pack(anchor="w")
         if self.app.slot_of(pg) is not None:
             tk.Label(side, text="yours - double-click", bg=CARD,
                      fg=DIM, font=("", 8)).pack(anchor="w")
         if (pg, 0) not in self.shots:
             tk.Label(side, text="no picture yet", bg=CARD,
-                     fg="#6b7280", font=("", 8)).pack(anchor="w")
+                     fg=theme.PAL["faint"], font=("", 8)).pack(anchor="w")
 
         def tool(text, cmd, fg="#e6e8ec"):
-            b = tk.Button(btn, text=text, width=2, bd=0, bg="#2b3038", fg=fg,
+            b = tk.Button(btn, text=text, width=2, bd=0, bg=theme.PAL["line"], fg=fg,
                           activebackground="#39404a", activeforeground=fg,
                           command=cmd)
             b.pack(side="right", padx=2)
@@ -227,7 +230,7 @@ class PageList(ttk.Frame):
         # you want it is the place you were looking at.
         tool("+", lambda p=pg: self.app.pg_new(after=p))
         if self.app.slot_of(pg) is not None:
-            tool("✕", lambda p=pg: self.app.pg_delete(p), fg="#e0806a")
+            tool("✕", lambda p=pg: self.app.pg_delete(p), fg=theme.PAL["warn"])
 
         for wdg in (card, pic, side):
             wdg.bind("<Button-1>", lambda _e, p=pg: self.app.pg_show(p))
@@ -272,7 +275,7 @@ class PageList(ttk.Frame):
             mids.append(c.winfo_rooty() - self.list.winfo_rooty()
                         + c.winfo_height() / 2.0)
 
-        gap = tk.Frame(self.list, bg="#171a20", bd=1, relief="sunken", height=h)
+        gap = tk.Frame(self.list, bg=theme.PAL["bg"], bd=1, relief="sunken", height=h)
         self._drag = {"pg": pg, "card": card, "gap": gap, "rest": rest,
                       "mids": mids, "hold": hold, "index": None}
         self._gap_to(min(idx, len(rest)))

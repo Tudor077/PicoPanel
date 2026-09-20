@@ -81,6 +81,7 @@ def main():
         "--hidden-import", "widgets",
         "--hidden-import", "editor",
         "--hidden-import", "single",
+        "--hidden-import", "theme",
         "--hidden-import", "pagelist",
         # The joystick axes, read through winmm with ctypes.
         "--hidden-import", "sticks",

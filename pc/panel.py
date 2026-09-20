@@ -42,6 +42,7 @@ import sticks
 import widgets as WG
 import settings
 import single
+import theme
 
 try:
     from tray import Tray
@@ -80,7 +81,7 @@ PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 # 4x is 512x128 on screen: readable across a desk without taking over the window.
 MIRROR_SCALE = 4
 MIRROR_LIT = "#e6f2ff"        # an OLED's slightly blue white
-MIRROR_DARK = "#0b0f14"
+MIRROR_DARK = "#0a0c0e"
 PCF_BTN = ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4"]
 
 
@@ -343,6 +344,9 @@ class App(tk.Tk):
     def __init__(self, hidden=False):
         super().__init__()
         self.title("PicoPanel")
+        # One look for the whole window - the one the page cards already had.
+        # Two designs in one window is worse than either.
+        theme.apply(self)
         # The taskbar shows the WINDOW's icon, not the executable's - which is
         # why a perfectly good icon in the .exe still left Tk's default feather
         # sitting down there. Same drawing as the tray and the exe, written out
@@ -464,7 +468,8 @@ class App(tk.Tk):
         row = ttk.Frame(g)
         row.pack(fill="x", pady=4)
         self.game_lbl = ttk.Label(row, text="no game running",
-                                  font=("", 11, "bold"), width=30)
+                                  font=("", 11, "bold"), width=30,
+                                  foreground=theme.PAL["dim"])
         self.game_lbl.pack(side="left", padx=6)
         self.demo_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row, text="test generator", variable=self.demo_var,
@@ -482,13 +487,14 @@ class App(tk.Tk):
         self.mirror_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(head, text="Mirror the OLED", variable=self.mirror_var,
                         command=self._toggle_mirror).pack(side="left", padx=6)
-        self.mirror_lbl = ttk.Label(head, text="off", foreground="#888")
+        self.mirror_lbl = ttk.Label(head, text="off",
+                                    foreground=theme.PAL["dim"])
         self.mirror_lbl.pack(side="left", padx=6)
         self.mirror_canvas = tk.Canvas(mf, width=128 * MIRROR_SCALE,
                                        height=32 * MIRROR_SCALE,
                                        highlightthickness=1,
-                                       highlightbackground="#999",
-                                       background="#0b0f14")
+                                       highlightbackground=theme.PAL["line"],
+                                       background=theme.PAL["screen"])
         self.mirror_canvas.pack(padx=6, pady=6)
         self._fb_img = None          # Tk drops an image that nothing references
 
@@ -561,14 +567,14 @@ class App(tk.Tk):
         logf = ttk.LabelFrame(self, text="Log")
         logf.pack(fill="both", expand=True, **pad)
         self.log = tk.Text(logf, height=10, wrap="none", state="disabled",
-                           font=("Consolas", 9))
+                           font=("Consolas", 9), **theme.text_opts())
         sb = ttk.Scrollbar(logf, command=self.log.yview)
         self.log.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self.log.pack(fill="both", expand=True)
-        self.log.tag_configure("tx", foreground="#0a7")
-        self.log.tag_configure("err", foreground="#c33")
-        self.log.tag_configure("info", foreground="#888")
+        self.log.tag_configure("tx", foreground=theme.PAL["ok"])
+        self.log.tag_configure("err", foreground=theme.PAL["warn"])
+        self.log.tag_configure("info", foreground=theme.PAL["dim"])
 
     def _lamp_row(self, parent, title, names):
         f = ttk.Frame(parent)
@@ -576,10 +582,13 @@ class App(tk.Tk):
         ttk.Label(f, text=title, width=17).pack(side="left", padx=6)
         lamps = []
         for n in names:
-            c = tk.Canvas(f, width=34, height=26, highlightthickness=0)
+            c = tk.Canvas(f, width=34, height=26, highlightthickness=0,
+                          background=theme.PAL["bg"])
             c.pack(side="left", padx=2)
-            rect = c.create_rectangle(1, 1, 33, 25, fill="#ddd", outline="#999")
-            c.create_text(17, 13, text=n, font=("", 8))
+            rect = c.create_rectangle(1, 1, 33, 25, fill=theme.PAL["card"],
+                                      outline=theme.PAL["line"])
+            c.create_text(17, 13, text=n, font=("", 8),
+                          fill=theme.PAL["dim"])
             lamps.append((c, rect))
         return lamps
 
@@ -587,7 +596,8 @@ class App(tk.Tk):
     def _set_lamps(lamps, states):
         for i, (c, rect) in enumerate(lamps):
             on = i < len(states) and states[i]
-            c.itemconfigure(rect, fill="#2c6" if on else "#ddd")
+            c.itemconfigure(rect, fill=theme.PAL["ok"] if on
+                            else theme.PAL["card"])
 
     # -------------------------------------------------- tray
     def _start_tray(self):
@@ -676,7 +686,7 @@ class App(tk.Tk):
 
         ttk.Separator(scr).pack(fill="x", padx=8, pady=8)
         ttk.Label(scr, text="How things appear").pack(anchor="w", padx=8)
-        ttk.Label(scr, wraplength=330, justify="left", foreground="#555",
+        ttk.Label(scr, wraplength=330, justify="left", style="Hint.TLabel",
                   text="When something in a page's header changes - its name, "
                        "where it sits in the rotation, an alarm turning up."
                   ).pack(anchor="w", padx=8, pady=(2, 2))
@@ -692,7 +702,7 @@ class App(tk.Tk):
 
         ttk.Separator(scr).pack(fill="x", padx=8, pady=8)
         ttk.Label(scr, text="I2C speed").pack(anchor="w", padx=8)
-        ttk.Label(scr, wraplength=330, justify="left", foreground="#555",
+        ttk.Label(scr, wraplength=330, justify="left", style="Hint.TLabel",
                   text="There is no vsync on these modules - they bring out SDA "
                        "and SCL and nothing else. What you can do is spend less "
                        "time writing the frame, because the tear is the panel "
@@ -733,7 +743,7 @@ class App(tk.Tk):
                    command=self._export_cfg).pack(side="left")
         ttk.Button(keep, text="Import",
                    command=self._import_cfg).pack(side="left", padx=6)
-        ttk.Label(opt, foreground="#555", wraplength=320, justify="left",
+        ttk.Label(opt, style="Hint.TLabel", wraplength=320, justify="left",
                   text="Everything in one file: the pages and their order, your "
                        "layouts and their names, the alarms, the lot."
                   ).pack(anchor="w", padx=8, pady=(0, 6))
@@ -746,12 +756,13 @@ class App(tk.Tk):
         # ---- alarms
         al = ttk.LabelFrame(rest, text="Alarms")
         al.pack(fill="x", pady=(10, 0))
-        ttk.Label(al, wraplength=320, justify="left", foreground="#555",
+        ttk.Label(al, wraplength=320, justify="left", style="Hint.TLabel",
                   text="The screen flashes and says so, whatever page is up - "
                        "so it is not a widget on a page you might not be "
                        "looking at. The app keeps the time; the board owns "
                        "the glass.").pack(anchor="w", padx=8, pady=(4, 2))
-        self.al_box = tk.Listbox(al, height=4, activestyle="none")
+        self.al_box = tk.Listbox(al, height=4, activestyle="none",
+                                 **theme.text_opts(caret=False))
         self.al_box.pack(fill="x", padx=8)
         row = ttk.Frame(al)
         row.pack(fill="x", padx=8, pady=4)
@@ -777,7 +788,7 @@ class App(tk.Tk):
         ttk.Checkbutton(ph, text="Take alarms from the phone",
                         variable=self.phone_var,
                         command=self._toggle_phone).pack(anchor="w")
-        self.phone_lbl = ttk.Label(ph, foreground="#555", wraplength=320,
+        self.phone_lbl = ttk.Label(ph, style="Hint.TLabel", wraplength=320,
                                    justify="left", text="")
         self.phone_lbl.pack(anchor="w", padx=20)
         self._alarm_refresh()
@@ -801,7 +812,7 @@ class App(tk.Tk):
         box = ttk.Frame(parent)
         box.pack(**pack)
         canvas = tk.Canvas(box, highlightthickness=0, width=380,
-                           background=self.cget("background"))
+                           background=theme.PAL["bg"])
         bar = ttk.Scrollbar(box, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=bar.set)
         bar.pack(side="right", fill="y")
@@ -1921,10 +1932,11 @@ class App(tk.Tk):
         """Display only. Sending happens in _send_loop."""
         tel = self.hub.best()
         if tel is None:
-            self.game_lbl.configure(text="no game running", foreground="#888")
+            self.game_lbl.configure(text="no game running",
+                                    foreground=theme.PAL["dim"])
             self.game_det.configure(text="")
             return
-        self.game_lbl.configure(text=f"{tel.src}", foreground="#0a6")
+        self.game_lbl.configure(text=f"{tel.src}", foreground=theme.PAL["ok"])
         g = "R" if tel.gear < 0 else ("N" if tel.gear == 0 else str(tel.gear))
         det = (f"{tel.speed_kmh:6.1f} km/h   {tel.rpm:5.0f} rpm   gear {g}"
                f"   {tel.fuel_pct:3.0f}% fuel")
@@ -1945,7 +1957,7 @@ class App(tk.Tk):
         self.link.send("o")
         if not self.mirror_var.get():
             self.mirror_canvas.delete("all")
-            self.mirror_lbl.configure(text="off", foreground="#888")
+            self.mirror_lbl.configure(text="off", foreground=theme.PAL["dim"])
 
     def _draw_frame(self, w, h, data):
         """One SSD1306 frame buffer -> an image on the canvas.
@@ -1987,7 +1999,8 @@ class App(tk.Tk):
             # Frames arrived without us asking - the board was already mirroring
             # (someone typed 'o' on it). Follow what's actually happening.
             self.mirror_var.set(True)
-        self.mirror_lbl.configure(text=f"{w}x{h} live", foreground="#0a6")
+        self.mirror_lbl.configure(text=f"{w}x{h} live",
+                                  foreground=theme.PAL["ok"])
 
     def _preview_follow(self, _ev=None):
         """Turn the board's mirror on while the Settings tab is up, and put it
@@ -2042,11 +2055,14 @@ class App(tk.Tk):
         self.err_lbl.configure(text=f"Enc errors: {t['err']}")
         hid = t["hid"]
         if hid == "1":
-            self.hid_lbl.configure(text="HID: ARMED", foreground="#c60")
+            self.hid_lbl.configure(text="HID: ARMED",
+                                   foreground=theme.PAL["accent"])
         elif hid == "0":
-            self.hid_lbl.configure(text="HID: off", foreground="")
+            self.hid_lbl.configure(text="HID: off",
+                                   foreground=theme.PAL["ink"])
         else:
-            self.hid_lbl.configure(text="HID: unavailable", foreground="#888")
+            self.hid_lbl.configure(text="HID: unavailable",
+                                   foreground=theme.PAL["dim"])
 
 
 if __name__ == "__main__":
