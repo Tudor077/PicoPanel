@@ -81,6 +81,11 @@ DEFAULTS = {
     # asked is one you have to trust further than this deserves.
     "phone_bridge": False,
 
+    # How a changed header arrives: "classic" down from the top, the way the
+    # board's own header comes back; "wipe" in from the left like the splash;
+    # "type" a letter at a time; "none" at all.
+    "anim_style": "classic",
+
     # Named page arrangements: {"Driving": [1, 3, 0], ...}. Yours, not the
     # board's - it only ever hears the one list that is currently in force.
     "page_presets": {},

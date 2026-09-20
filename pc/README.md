@@ -467,12 +467,17 @@ Off by default, and it binds to the LAN: there is no account and no password,
 and the worst anybody on your wifi can do with it is flash the panel on your
 desk. The soonest of the two lists wins, whichever it came from.
 
-**A changed header sweeps in.** Rename a page, reorder it, have an alarm
-appear - anything up there changing and the WHOLE bar arrives again from the
-left, with the same dithered leading edge the splash wipes PANEL in with. Not
-letter by letter: the bar, the name, the counter and the countdown come in
-together, because they are one thing. The countdown's own ticking does not
-start it over - a bar that swept every sixty seconds would be a fidget.
+**A changed header arrives the way the panel's own does: down from the top.**
+Rename a page, reorder it, have an alarm turn up - anything up there changing
+and the whole bar slides in again, the same nine pixels the board slides its
+own header, at the same speed. The bar, the name, the counter and the countdown
+together, because they are one thing.
+
+**Settings -> Screen -> How things appear** picks the style: *classic* down from
+the top, *wipe* in from the left like the splash, *type* a letter at a time, or
+*none*. Classic is the default because it is what the rest of the panel already
+does. The countdown's own ticking never starts it over - a header that played
+its arrival every sixty seconds would be a fidget.
 
 **Each page has a name and a header.** The board calls the slot `MINE 3` and
 always will - the name lives in the picture the app sends, so it is the app's

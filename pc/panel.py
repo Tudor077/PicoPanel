@@ -661,6 +661,22 @@ class App(tk.Tk):
                             command=self._apply_rpm).pack(anchor="w", padx=20)
 
         ttk.Separator(scr).pack(fill="x", padx=8, pady=8)
+        ttk.Label(scr, text="How things appear").pack(anchor="w", padx=8)
+        ttk.Label(scr, wraplength=330, justify="left", foreground="#555",
+                  text="When something in a page's header changes - its name, "
+                       "where it sits in the rotation, an alarm turning up."
+                  ).pack(anchor="w", padx=8, pady=(2, 2))
+        self.anim_var = tk.StringVar(value=str(self.cfg.get("anim_style",
+                                                            "classic")))
+        for text, val in (("Classic - down from the top, like the panel's own",
+                           "classic"),
+                          ("Wipe - in from the left, like the splash", "wipe"),
+                          ("Type - a letter at a time", "type"),
+                          ("None - just there", "none")):
+            ttk.Radiobutton(scr, text=text, variable=self.anim_var, value=val,
+                            command=self._apply_anim).pack(anchor="w", padx=20)
+
+        ttk.Separator(scr).pack(fill="x", padx=8, pady=8)
         ttk.Label(scr, text="I2C speed").pack(anchor="w", padx=8)
         ttk.Label(scr, wraplength=330, justify="left", foreground="#555",
                   text="There is no vsync on these modules - they bring out SDA "
@@ -799,20 +815,34 @@ class App(tk.Tk):
         # yours slides with it and goes away when the panel goes quiet. The
         # fourth is the countdown, which does NOT go away with it: the board
         # keeps showing it on its own pages too.
-        return (name, where, self.link.board_hdr, badge,
-                self._reveal(slot, name, where, bool(badge)))
+        shift, reveal = self.link.board_hdr, 1.0
+        p = self._progress(slot, name, where, bool(badge))
+        style = self.cfg.get("anim_style", "classic")
+        if p < 1.0 and style != "none":
+            if style == "classic":
+                # Down from the top, which is how the header comes back on
+                # every other page. Clamped to 8 so the bar is always the
+                # thing on screen, rather than blinking through the state
+                # where it does not exist at all.
+                if shift < WG.HEADER_H:
+                    shift = max(shift, min(8, int(round(9 * (1 - p)))))
+            elif style == "wipe":
+                reveal = p
+            elif style == "type":
+                cut = lambda t: t[:max(0, int(len(t) * p + 0.001))]
+                name, badge = cut(name), cut(badge)
+        return (name, where, shift, badge, reveal)
 
-    # How long the whole bar takes to arrive. The board wipes its splash in
-    # over about this long; two things sweeping at two speeds on one screen
-    # would look like two machines.
-    WIPE_S = 0.35
+    # How long it takes to arrive. The board slides its own header the nine
+    # pixels in about this long, and two things moving at two speeds on one
+    # screen would look like two machines.
+    ANIM_S = 0.25
 
-    def _reveal(self, slot, *content):
-        """0 to 1: how much of the header has arrived.
+    def _progress(self, slot, *content):
+        """0 to 1 since anything in the header last changed.
 
-        Anything changing up there - the name, the page's place in the
-        rotation, an alarm appearing - starts the whole bar over from the
-        left. Not the countdown's own ticking, though: a bar that swept every
+        The name, the page's place in the rotation, an alarm appearing. NOT
+        the countdown's own ticking: a header that played its arrival every
         sixty seconds would be a fidget, not an animation.
         """
         st = self._typing.get(slot)
@@ -820,7 +850,7 @@ class App(tk.Tk):
         if st is None or st[0] != content:
             st = (content, now)
             self._typing[slot] = st
-        return min(1.0, (now - st[1]) / self.WIPE_S)
+        return min(1.0, (now - st[1]) / self.ANIM_S)
 
     def slot_of(self, pg):
         """Which of the pages you draw yourself this is, or None."""
@@ -1282,6 +1312,11 @@ class App(tk.Tk):
         self.cfg["rpm_style"] = v
         settings.save(self.cfg)
         self.link.send("%%rs=%d" % v, echo=False)
+
+    def _apply_anim(self):
+        self.cfg["anim_style"] = self.anim_var.get()
+        settings.save(self.cfg)
+        self._typing = {}          # so the next frame plays it the new way
 
     def _apply_i2c(self):
         v = int(self.i2c_var.get())
