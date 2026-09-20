@@ -177,6 +177,11 @@
    rather than somewhere proportional to a number. Change it for a different
    encoder and the drawing follows. */
 #define ENC_PER_TURN      20
+
+// How long a header takes to arrive, for the styles that are not the slide.
+// The slide is nine frames; this is about the same quarter of a second, so
+// picking a style changes the manner and not the pace.
+#define HDR_ARRIVE_MS     350UL
 #define SERIAL_HZ         5     // reports per second on Serial
 
 #define SCREEN_W       128
@@ -635,6 +640,19 @@ uint8_t  page       = P_OVERVIEW;
 // The rev counter: 0 = the bar across the bottom, 1 = a needle. Set from
 // the app, and read by audParse long before the drawing code exists.
 uint8_t  rpmStyle = 0;
+
+/* Pages that keep the screen lit while they are showing - one bit each, set
+   from the app. The GAME page has always done this while a game is sending,
+   and the words do it while something is playing; this is the same thing made
+   yours, for a page you want to be able to glance at from across the room. */
+uint32_t aodMask = 0;
+
+/* How a header arrives: 0 down from the top (the panel's own way), 1 wiped in
+   from the left like the splash, 2 a letter at a time, 3 just there. The app
+   sets it, and it applies to every page - a global setting that only reached
+   the pages the PC draws is a setting that does nothing. */
+uint8_t  hdrStyle = 0;
+uint32_t hdrAt    = 0;      // when it started arriving
 /* ---- the alarm ----------------------------------------------------------
    The app keeps the clock and the list; the board just does as it is told, on
    any page, because an alarm you only see if you happen to be on the right
@@ -1959,6 +1977,24 @@ void audParse(char *s) {
     else if (!strcasecmp(key, "wk")) {
       oledWake();
     }
+    /* "%ao=1,3,5" - the pages that keep the screen lit. "%ao=" for none. */
+    else if (!strcasecmp(key, "ao")) {
+      uint32_t m = 0;
+      const char *p = val;
+      while (*p) {
+        while (*p == ',' || *p == ' ') p++;
+        if (!*p) break;
+        int n = atoi(p);
+        if (n >= 0 && n < 32) m |= (1UL << n);
+        while (*p && *p != ',') p++;
+      }
+      aodMask = m;
+    }
+    /* "%hs=0..3" - how a header arrives. See hdrStyle. */
+    else if (!strcasecmp(key, "hs")) {
+      uint8_t st = (uint8_t)atoi(val);
+      if (st <= 3) hdrStyle = st;
+    }
     else if (!strcasecmp(key, "gs")) {
       uint8_t n = (uint8_t)atoi(val);
       if (n < gameSubCount()) gameSub = n;
@@ -2232,6 +2268,14 @@ void oledSleepService() {
   // dark twenty seconds in is no use to anybody - and unlike the other pages
   // this one changes by itself, so there is something to look at.
   if (page == P_MUSIC && musicSub == 1 && npFresh() && npPlaying) {
+    if (oledSleep != 0) oledWakeReq = true;
+    return;
+  }
+
+  // A page you asked to stay lit. Like the game and the words above it, this
+  // holds the panel on without touching tLastAct - that clock is yours, and
+  // the header retract reads the same one.
+  if (page < 32 && (aodMask & (1UL << page))) {
     if (oledSleep != 0) oledWakeReq = true;
     return;
   }
@@ -2870,6 +2914,10 @@ static bool alarmLeft(char *out, size_t n) {
 void header(int shift) {
   int h = 9 - shift;
   if (h > 0) oled->fillRect(0, 0, SCREEN_W, h, SSD1306_WHITE);
+  // How far through its arrival this one is, for the styles that need it.
+  uint32_t since = millis() - hdrAt;
+  uint16_t prog = (since >= HDR_ARRIVE_MS) ? 256
+                  : (uint16_t)(since * 256UL / HDR_ARRIVE_MS);
   oled->setTextSize(1);            // never inherited from the previous page
   oled->setTextColor(SSD1306_BLACK);
   // The name is written LAST, once we know what room is left - see below.
@@ -2913,10 +2961,24 @@ void header(int shift) {
     strncpy(nm, PAGE_NAME[page], sizeof(nm) - 1);
     nm[sizeof(nm) - 1] = 0;
     if ((int)strlen(nm) > nameRoom) nm[nameRoom] = 0;
+    // Typed: as many letters as have arrived.
+    if (hdrStyle == 2 && prog < 256) {
+      int shown = (int)strlen(nm) * prog / 256;
+      nm[shown] = 0;
+    }
     oled->setCursor(nameX, 1 - shift);
     oled->print(nm);
   }
   oled->setTextColor(SSD1306_WHITE);
+
+  // Wiped: everything is drawn, then the part that has not arrived yet is
+  // taken away again. Drawing it in pieces would mean teaching every line
+  // above where its own left edge is.
+  if (hdrStyle == 1 && prog < 256) {
+    int cut = SCREEN_W * prog / 256;
+    if (cut < SCREEN_W)
+      oled->fillRect(cut, 0, SCREEN_W - cut, 9 - shift, SSD1306_BLACK);
+  }
 }
 
 /* How long until the next alarm, top right, on every page and whether or not
@@ -3612,8 +3674,17 @@ void render() {
 
   static uint8_t hdrShift = 0;                 // 0 = fully shown, 9 = gone
   uint8_t target = ((millis() - tLastAct) < OLED_RETRACT_MS) ? 0 : 9;
-  if      (hdrShift < target) hdrShift++;
-  else if (hdrShift > target) hdrShift--;
+  // Coming back counts as arriving, whatever style: note when it started, so
+  // the wipe and the typing have something to measure against.
+  static uint8_t lastTarget = 9;
+  if (target == 0 && lastTarget != 0) hdrAt = millis();
+  lastTarget = target;
+  if (hdrStyle == 0) {
+    if      (hdrShift < target) hdrShift++;
+    else if (hdrShift > target) hdrShift--;
+  } else {
+    hdrShift = target;            // the other styles do not slide
+  }
   // A page the PC draws gets the whole screen, header included - so it has to
   // be told where this one is, or its header is the only one on the panel
   // that never goes away.
@@ -4135,6 +4206,9 @@ void printHelp() {
   Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..8"));
   Serial.println(F("    %gs=n %ms=n   which sub-page of GAME / MUSIC"));
   Serial.println(F("    %fl=<ms>,<text>  flash the screen - the app's alarms"));
+  Serial.println(F("    %ao=1,3      pages that keep the screen lit"));
+  Serial.println(F("    %hs=0|1|2|3  how a header arrives: slide, wipe, type,"));
+  Serial.println(F("    or not at all."));
   Serial.println(F("    %wk          wake the panel - the app, when you do"));
   Serial.println(F("    something at that end that is meant to be seen here."));
   Serial.println(F("    %na=<secs>,<what> the next alarm, counted down in the"));
@@ -4397,6 +4471,11 @@ void serialReport() {
   Serial.print(F(" HID=-"));
 #endif
   Serial.print(F(" OLED=")); Serial.print(oledOK ? F("ok") : F("-"));
+  // 0 lit, 1 dimmed, 2 off. Not visible in the mirrored frame - that is the
+  // buffer, and the buffer is the same whether the glass is lit or not - so
+  // without this there is no way to tell from outside whether "keep this page
+  // lit" is doing anything.
+  Serial.print(F(" SLP=")); Serial.print(oledSleep);
   Serial.print(F(" FPS=")); Serial.print(fps);
   Serial.print(F(" RND=")); Serial.print(renderUs);
   Serial.print(F("us I2C=")); Serial.print(i2cHz / 1000);

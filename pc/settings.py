@@ -86,6 +86,11 @@ DEFAULTS = {
     # "type" a letter at a time; "none" at all.
     "anim_style": "classic",
 
+    # Pages that keep the screen lit while they are showing, by number. The
+    # panel dims after twenty idle seconds and goes dark after a minute, which
+    # is right for a panel you glance at and wrong for one you are watching.
+    "aod_pages": [],
+
     # Named page arrangements: {"Driving": [1, 3, 0], ...}. Yours, not the
     # board's - it only ever hears the one list that is currently in force.
     "page_presets": {},

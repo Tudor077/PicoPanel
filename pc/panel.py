@@ -117,6 +117,9 @@ def parse_telemetry(line):
         "game": out.get("GM"),
         "fps": num("FPS"),
         "oled": out.get("OLED") == "ok",
+        # 0 lit, 1 dimmed, 2 off. The mirrored frame cannot say - that is the
+        # buffer, and the buffer is the same whether the glass is on or not.
+        "sleep": num("SLP"),
     }
 
 
@@ -724,6 +727,17 @@ class App(tk.Tk):
         ttk.Checkbutton(opt, text="Move the app's own volume slider",
                         variable=self.inapp_var,
                         command=self._toggle_inapp).pack(anchor="w", padx=8, pady=3)
+        keep = ttk.Frame(opt)
+        keep.pack(fill="x", padx=8, pady=(8, 4))
+        ttk.Button(keep, text="Export settings",
+                   command=self._export_cfg).pack(side="left")
+        ttk.Button(keep, text="Import",
+                   command=self._import_cfg).pack(side="left", padx=6)
+        ttk.Label(opt, foreground="#555", wraplength=320, justify="left",
+                  text="Everything in one file: the pages and their order, your "
+                       "layouts and their names, the alarms, the lot."
+                  ).pack(anchor="w", padx=8, pady=(0, 6))
+
         self.kar_var = tk.BooleanVar(value=bool(self.cfg.get("karaoke", False)))
         ttk.Checkbutton(opt, text="Karaoke (asks lrclib.net for lyrics)",
                         variable=self.kar_var,
@@ -1443,10 +1457,48 @@ class App(tk.Tk):
         settings.save(self.cfg)
         self.link.send("%%rs=%d" % v, echo=False)
 
+    ANIM_CODE = {"classic": 0, "wipe": 1, "type": 2, "none": 3}
+
     def _apply_anim(self):
         self.cfg["anim_style"] = self.anim_var.get()
         settings.save(self.cfg)
         self._typing = {}          # so the next frame plays it the new way
+        # The board draws its own pages' headers, so it needs the style too -
+        # a global setting that only reached the pages the PC draws is a
+        # setting that does nothing, which is exactly how it looked.
+        self.link.send("%%hs=%d" % self.ANIM_CODE.get(self.anim_var.get(), 0),
+                       echo=False)
+        self.wake_panel()          # so you can see what you just picked
+
+    # ---- pages that stay lit ---------------------------------------------
+    def aod_pages(self):
+        v = self.cfg.get("aod_pages")
+        return [int(i) for i in v if isinstance(i, int)] if isinstance(v, list) else []
+
+    def aod_of(self, pg):
+        return pg in self.aod_pages()
+
+    def aod_toggle(self, pg):
+        """Keep the screen lit while this page is showing, or let it sleep.
+
+        The panel dims after twenty idle seconds and goes dark after a minute.
+        That is right for a page you glance at and wrong for one you are
+        watching - a clock, a track, a gauge - and which is which is yours to
+        say, not mine.
+        """
+        on = self.aod_pages()
+        if pg in on:
+            on.remove(pg)
+        else:
+            on.append(pg)
+        self.cfg["aod_pages"] = sorted(on)
+        settings.save(self.cfg)
+        self._apply_aod()
+        self.pg_cards.refill()
+
+    def _apply_aod(self):
+        self.link.send("%ao=" + ",".join(str(i) for i in self.aod_pages()),
+                       echo=False)
 
     def _apply_i2c(self):
         v = int(self.i2c_var.get())
@@ -1463,6 +1515,9 @@ class App(tk.Tk):
         self.link.send("%%rs=%d" % int(self.cfg.get("rpm_style", 0)), echo=False)
         self._had_alarm = False     # so the next tick tells it either way
         self.link.send("%%ic=%d" % int(self.cfg.get("i2c_khz", 400)), echo=False)
+        self.link.send("%%hs=%d" % self.ANIM_CODE.get(
+            self.cfg.get("anim_style", "classic"), 0), echo=False)
+        self._apply_aod()
 
     def _toggle_karaoke(self):
         """Synced lyrics on the KARAOKE page.
@@ -1496,6 +1551,62 @@ class App(tk.Tk):
 
     def save_cfg(self):
         settings.save(self.cfg)
+
+    # ---- settings, in and out --------------------------------------------
+    def _export_cfg(self):
+        """Write the whole thing to a file you choose.
+
+        The file the app keeps is in %LOCALAPPDATA% under a name nobody would
+        guess; this is the same JSON somewhere you can find it, copy it to
+        another machine, or keep before trying something.
+        """
+        from tkinter import filedialog, messagebox
+        import json
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Keep these settings where?",
+            defaultextension=".json", initialfile="picopanel-settings.json",
+            filetypes=[("Settings", "*.json"), ("Everything", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.cfg, f, indent=2)
+        except OSError as e:
+            messagebox.showerror("Export", str(e), parent=self)
+            return
+        self._log("settings written to %s" % path, "info")
+
+    def _import_cfg(self):
+        """Read one back. Asks first: this replaces what you have."""
+        from tkinter import filedialog, messagebox
+        import json
+        path = filedialog.askopenfilename(
+            parent=self, title="Which settings file?",
+            filetypes=[("Settings", "*.json"), ("Everything", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                new = json.load(f)
+            if not isinstance(new, dict):
+                raise ValueError("that is not a settings file")
+        except (OSError, ValueError) as e:
+            messagebox.showerror("Import", str(e), parent=self)
+            return
+        if not messagebox.askyesno(
+                "Import settings",
+                "Replace everything - pages, layouts, alarms - with what is in "
+                "that file?\n\nThe app will close afterwards; start it again "
+                "to see them.", parent=self):
+            return
+        merged = dict(settings.DEFAULTS)
+        merged.update(new)
+        ok, msg = settings.save(merged)
+        if not ok:
+            messagebox.showerror("Import", msg, parent=self)
+            return
+        self._log("settings imported from %s - restarting" % path, "info")
+        self.after(400, self._quit)
 
     def volume_needed(self):
         """Is the volume actually on screen?
@@ -1925,7 +2036,9 @@ class App(tk.Tk):
         name = PAGE_NAMES[pg] if pg is not None and 0 <= pg < len(PAGE_NAMES) else "?"
         self.page_lbl.configure(text=f"Page: {name}")
         fps = f"  {t['fps']} FPS" if t["fps"] is not None else ""
-        self.oled_lbl.configure(text=f"OLED: {'ok' if t['oled'] else 'missing'}{fps}")
+        lit = {0: "", 1: "  dimmed", 2: "  off"}.get(t.get("sleep"), "")
+        self.oled_lbl.configure(
+            text=f"OLED: {'ok' if t['oled'] else 'missing'}{fps}{lit}")
         self.err_lbl.configure(text=f"Enc errors: {t['err']}")
         hid = t["hid"]
         if hid == "1":

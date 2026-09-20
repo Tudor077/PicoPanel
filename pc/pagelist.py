@@ -215,6 +215,12 @@ class PageList(ttk.Frame):
             b.pack(side="right", padx=2)
             self._wheel(b)
 
+        # Keep the screen lit on this page, or let it sleep. A sun, because
+        # the panel's own word for it is "dim after twenty seconds".
+        lit = self.app.aod_of(pg)
+        tool("☀" if lit else "◌",
+             lambda p=pg: self.app.aod_toggle(p),
+             fg="#e8c45f" if lit else "#6b7280")
         # Out of the rotation, or back into it.
         tool("↓" if inside else "↑", lambda p=pg: self.app.pg_toggle(p))
         # A page of your own, made right here rather than at the end: the place
