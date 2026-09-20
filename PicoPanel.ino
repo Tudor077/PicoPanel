@@ -1828,7 +1828,14 @@ void audParse(char *s) {
   char *save = NULL;
   for (char *tok = strtok_r(s, ";", &save); tok; tok = strtok_r(NULL, ";", &save)) {
     char *eq = strchr(tok, '=');
-    if (!eq) continue;
+    if (!eq) {
+      // Everything here is key=value, with one exception: "%wk" carries
+      // nothing because there is nothing to carry. Rather than letting every
+      // handler cope with an empty value, the one that needs none is answered
+      // here.
+      if (!strcasecmp(tok, "wk")) oledWake();
+      continue;
+    }
     *eq = 0;
     char *key = tok, *val = eq + 1;
     // A CHANGE is what earns the screen, not the arrival of another identical
@@ -1937,6 +1944,14 @@ void audParse(char *s) {
         alarmWhat[sizeof(alarmWhat) - 1] = 0;
       }
       alarmDueAt = (secs > 0) ? (millis() + (uint32_t)secs * 1000UL) : 0;
+    }
+    /* "%wk" - somebody is doing something at the PC end that is meant to be
+       seen here: renaming a page, moving one. The panel has no way to know
+       that on its own, and its header slides away after twenty idle seconds,
+       so a title changing behind a bar that is not on screen changes nothing
+       anybody can see. */
+    else if (!strcasecmp(key, "wk")) {
+      oledWake();
     }
     else if (!strcasecmp(key, "gs")) {
       uint8_t n = (uint8_t)atoi(val);
@@ -4089,6 +4104,8 @@ void printHelp() {
   Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..8"));
   Serial.println(F("    %gs=n %ms=n   which sub-page of GAME / MUSIC"));
   Serial.println(F("    %fl=<ms>,<text>  flash the screen - the app's alarms"));
+  Serial.println(F("    %wk          wake the panel - the app, when you do"));
+  Serial.println(F("    something at that end that is meant to be seen here."));
   Serial.println(F("    %na=<secs>,<what> the next alarm, counted down in the"));
   Serial.println(F("    header on every page. No number: there isn't one."));
   Serial.println(F("    The board says '!PAGE n sub subs' on every change, so"));

@@ -176,10 +176,22 @@ class NowPlaying:
             "label": label,
         }
 
+    # How often to look when nothing is looking at us. The session API is a
+    # cross-process COM call per read; four a second, for ever, to feed a page
+    # nobody is on is most of what this program was doing while idle.
+    IDLE_S = 3.0
+
+    def want(self, on):
+        """Whether anything actually needs what is playing right now."""
+        self._want = bool(on)
+
     def _run(self):
         async def loop():
             mgr = None
             while not self._stop.is_set():
+                if not getattr(self, "_want", True):
+                    await asyncio.sleep(self.IDLE_S)
+                    continue
                 try:
                     if mgr is None:
                         mgr = await _Manager.request_async()

@@ -335,17 +335,27 @@ class Editor(ttk.Frame):
             self.sel = None
             self._save()
 
-    def _size_of(self, w):
-        """What that widget actually occupies. Text measures itself."""
+    def _box_of(self, w):
+        """(x, y, width, height) of what that widget actually draws, in panel
+        pixels - the ink, not the place it was asked to start from."""
         try:
-            return WG.measure(w, dict(self.app.widget_data(), _editing=1))
+            dx, dy, ww, hh = WG.bounds(w, dict(self.app.widget_data(),
+                                               _editing=1))
         except Exception:
-            return w.w, w.h
+            dx, dy, ww, hh = 0, 0, w.w, w.h
+        return w.x + dx, w.y + dy, ww, hh
+
+    def _size_of(self, w):
+        b = self._box_of(w)
+        return b[2], b[3]
 
     def _hit(self, x, y):
         for w in reversed(self.items):
-            ww, hh = self._size_of(w)
-            if w.x <= x < w.x + max(ww, 4) and w.y <= y < w.y + max(hh, 4):
+            bx, by, ww, hh = self._box_of(w)
+            # A one-pixel line is a thing you have to be able to grab, so
+            # nothing is ever narrower than four pixels to the pointer.
+            ww, hh = max(ww, 4), max(hh, 4)
+            if bx - 1 <= x < bx + ww + 1 and by - 1 <= y < by + hh + 1:
                 return w
         return None
 
@@ -487,12 +497,12 @@ class Editor(ttk.Frame):
                 self._grid()
                 if self.sel:
                     w = self.sel
-                    ww, hh = self._size_of(w)
+                    bx, by, ww, hh = self._box_of(w)
                     if w.kind in WG.AUTO_SIZE:
                         w.w, w.h = ww, hh      # keep the stored box honest
                     self.canvas.create_rectangle(
-                        w.x * ZOOM, w.y * ZOOM,
-                        (w.x + ww) * ZOOM - 1, (w.y + hh) * ZOOM - 1,
+                        bx * ZOOM, by * ZOOM,
+                        (bx + ww) * ZOOM - 1, (by + hh) * ZOOM - 1,
                         outline="#e8744f", dash=(3, 2))
         except Exception as e:
             # Once, not sixty times a second - but once, because a preview that
@@ -517,9 +527,9 @@ class Editor(ttk.Frame):
         w = self.sel
         if not w:
             return
-        ww, hh = self._size_of(w)
-        self._snap = [round(w.x + ww / 2.0) == round(WG.W / 2.0),
-                      round(w.y + hh / 2.0) == round(WG.H / 2.0)]
+        bx, by, ww, hh = self._box_of(w)
+        self._snap = [round(bx + ww / 2.0) == round(WG.W / 2.0),
+                      round(by + hh / 2.0) == round(WG.H / 2.0)]
 
     def _grid(self):
         """The screen's own grid, over the picture but never in it.

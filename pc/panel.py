@@ -72,6 +72,7 @@ CUSTOM_FIRST, CUSTOM_N = 3, 8
 # The two pages that have faces of their own, by name rather than by number:
 # the numbers move every time the board grows a page, and have.
 P_GAME, P_MUSIC = PAGE_NAMES.index("GAME"), PAGE_NAMES.index("MUSIC")
+P_HID = PAGE_NAMES.index("HID")
 
 PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
@@ -365,6 +366,8 @@ class App(tk.Tk):
             log=lambda msg: self.q.put(("err", msg)),
             selected=self.cfg.get("audio_target"),
             on_select=self._remember_audio_target)
+        self.audio.wants = self.music_needed
+        self.audio.volume_wants = self.volume_needed
         self.audio.unicode_titles = bool(self.cfg.get("unicode_titles", True))
         self.audio.mixer.set_use_inapp(bool(self.cfg.get("app_own_volume", True)))
         if self.audio.lyrics:
@@ -776,6 +779,17 @@ class App(tk.Tk):
                 return mine
         return PAGE_NAMES[pg] if 0 <= pg < len(PAGE_NAMES) else "?"
 
+    def wake_panel(self):
+        """Tell the board somebody is doing something meant to be seen.
+
+        Renaming a page is activity - but not activity the BOARD can see, and
+        its header slides away after twenty idle seconds. Without this the new
+        title arrived behind a bar that was not on screen, which looked exactly
+        like nothing happening.
+        """
+        if self.link.open:
+            self.link.send("%wk", echo=False)
+
     def set_page_name(self, slot, name):
         names = dict(self.cfg.get("page_names") or {})
         name = (name or "").strip()
@@ -786,6 +800,7 @@ class App(tk.Tk):
         self.cfg["page_names"] = names
         settings.save(self.cfg)
         self.pg_cards.refill()
+        self.wake_panel()
 
     def page_of(self, slot):
         """The page number of one of your slots."""
@@ -800,6 +815,7 @@ class App(tk.Tk):
         h[str(slot)] = bool(on)
         self.cfg["page_headers"] = h
         settings.save(self.cfg)
+        self.wake_panel()
 
     def header_for(self, slot):
         """The two strings the header shows: the name, and where the page sits
@@ -848,8 +864,12 @@ class App(tk.Tk):
         st = self._typing.get(slot)
         now = time.time()
         if st is None or st[0] != content:
-            st = (content, now)
-            self._typing[slot] = st
+            # A name changes on every keystroke. Restarting the slide each
+            # time would leave the bar hovering a pixel below the top for as
+            # long as you kept typing, so a run of changes rides the animation
+            # that is already playing.
+            t0 = now if (st is None or now - st[1] >= self.ANIM_S) else st[1]
+            self._typing[slot] = st = (content, t0)
         return min(1.0, (now - st[1]) / self.ANIM_S)
 
     def slot_of(self, pg):
@@ -1005,6 +1025,7 @@ class App(tk.Tk):
         order, rest = self._pg_ids
         self.cfg["page_order"] = order
         settings.save(self.cfg)
+        self.wake_panel()
         if order:
             self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
 
@@ -1366,6 +1387,42 @@ class App(tk.Tk):
 
     def save_cfg(self):
         settings.save(self.cfg)
+
+    def volume_needed(self):
+        """Is the volume actually on screen?
+
+        It shows on MUSIC, on the HID page, and on the last of GAME's
+        sub-pages - and for a few seconds after the knob is turned, wherever
+        you are.
+        """
+        pg, sub = self.link.board_page, self.link.board_sub
+        if pg in (P_MUSIC, P_HID):
+            return True
+        if pg == P_GAME and sub >= max(0, self.subs_of(pg) - 1):
+            return True
+        return time.time() - getattr(self.audio, "last_touch", 0) < 15
+
+    def music_needed(self):
+        """Is anything on screen actually showing what is playing?
+
+        The MUSIC page and its words, a page of yours that shows the track,
+        or the volume having been touched in the last few seconds - after
+        which the level stays on screen for a moment. Otherwise nobody is
+        looking, and the media session can be left alone.
+        """
+        pg = self.link.board_page
+        if pg == P_MUSIC:
+            return True
+        if time.time() - getattr(self.audio, "last_touch", 0) < 15:
+            return True
+        slot = self.slot_of(pg)
+        if slot is not None:
+            for d in self.layout_of(slot):
+                if str(d.get("field", "")).startswith("np_"):
+                    return True
+                if d.get("kind") == "disc":
+                    return True
+        return False
 
     def widget_data(self):
         """One flat dict of everything a widget can be pointed at.

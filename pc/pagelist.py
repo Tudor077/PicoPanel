@@ -97,9 +97,14 @@ class PageList(ttk.Frame):
 
     def _wheel(self, wdg):
         """The wheel belongs to the list, not to whatever card happens to be
-        under the pointer - Tk hands it to the innermost widget."""
+        under the pointer - Tk hands it to the innermost widget, and a card is
+        a dozen of them. Bound on the widget AND everything inside it, since
+        the name, the hint and the buttons are all innermost to something.
+        """
         wdg.bind("<MouseWheel>",
                  lambda e: self.canvas.yview_scroll(-e.delta // 120, "units"))
+        for kid in wdg.winfo_children():
+            self._wheel(kid)
 
     def _blank_shot(self):
         """A dark rectangle the size of the panel, for a page not yet seen.
@@ -165,7 +170,7 @@ class PageList(ttk.Frame):
             for wdg in (row, pic):
                 wdg.bind("<Button-1>",
                          lambda _e, p=pg, s=sub: self.app.pg_show(p, s))
-                self._wheel(wdg)
+            self._wheel(row)
 
     def _card(self, pg, idx, inside):
         name = self.app.page_name(pg)
@@ -221,8 +226,8 @@ class PageList(ttk.Frame):
         for wdg in (card, pic, side):
             wdg.bind("<Button-1>", lambda _e, p=pg: self.app.pg_show(p))
             wdg.bind("<Double-Button-1>", lambda _e, p=pg: self.app.pg_open(p))
-        for wdg in (card, grip, pic, side, btn):
-            self._wheel(wdg)
+        # Last, so the recursion catches the labels and buttons inside.
+        self._wheel(card)
         if inside:
             grip.bind("<ButtonPress-1>",
                       lambda e, p=pg, i=idx: self._grab(e, p, i))

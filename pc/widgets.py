@@ -638,30 +638,47 @@ def header_bar(d, text, right="", shift=0, alarm="", bar=True):
         d.text((x, y - 1), alarm, font=f, fill=ink)
 
 
-def measure(w, data):
-    """How big the thing actually comes out.
+def bounds(w, data):
+    """(dx, dy, width, height) of what the widget actually draws.
 
-    Text is as wide as the text, so the box the editor picks up and outlines
-    is measured from what was drawn rather than from two numbers that changed
-    nothing.
+    The offset matters. PIL's text() puts the glyphs down from the origin with
+    the font's own bearing, so a line of text starts a pixel or two right of
+    and below where it was asked for - and a box measured from the origin sat
+    that far left of and above the letters. Which is exactly how it felt: a
+    hitbox a few pixels out of true.
     """
     if not HAVE_PIL or (w.kind not in AUTO_SIZE and w.kind not in AUTO_ALARM):
-        return w.w, w.h
+        return 0, 0, w.w, w.h
     try:
         d = ImageDraw.Draw(Image.new("1", (1, 1)))
         if w.kind in AUTO_ALARM:
-            txt = _alarm_parts(w, dict(data, _editing=1))[0]
-            box = d.textbbox((0, 0), txt or "0h00", font=_font(w.size))
-            return max(20, int(box[2]) + 11), max(11, int(box[3]))
+            # The bell is drawn at (x+1, y+1) and is six wide and seven tall;
+            # the text starts ten across, one row up. The box is the two of
+            # them together, measured rather than guessed at.
+            txt = _alarm_parts(w, dict(data, _editing=1))[0] or "0h00"
+            box = d.textbbox((10, -1), txt, font=_font(w.size))
+            x0, y0 = min(0, int(box[0])), min(1, int(box[1]))
+            x1, y1 = max(6, int(box[2])), max(8, int(box[3]))
+            return x0, y0, x1 - x0, y1 - y0
         txt = _text_of(w, data) or " "
         box = d.textbbox((0, 0), txt, font=_font(w.size))
-        tw, th = box[2], box[3]
+        dx, dy = int(box[0]), int(box[1])
+        tw, th = int(box[2]) - dx, int(box[3]) - dy
         if w.kind == "value" and w.label:
             cap = d.textbbox((0, 0), w.label, font=_font(9))
-            tw, th = max(tw, cap[2]), th + 9
-        return max(2, int(tw)), max(2, int(th))
+            # the caption sits on top, the value nine pixels below it
+            dx = min(dx, int(cap[0]))
+            tw = max(tw, int(cap[2]) - dx)
+            th, dy = th + 9 + (dy - int(cap[1])), int(cap[1])
+        return dx, dy, max(2, tw), max(2, th)
     except Exception:
-        return w.w, w.h
+        return 0, 0, w.w, w.h
+
+
+def measure(w, data):
+    """Just the size, for everything that only wants that."""
+    b = bounds(w, data)
+    return b[2], b[3]
 
 
 def wipe(im, reveal):

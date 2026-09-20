@@ -417,6 +417,21 @@ board:
 the default: if yours dislikes it the screen fills with rubbish and you come
 back here and set it down.
 
+## What it costs while you are not looking
+
+Measured on this machine, the app sitting in the tray with the board connected:
+**5.5% of a core down to 1.8%**, and the memory it churns through in eight
+seconds from 4.6 MB to 0.3.
+
+Two things were running for nobody. The media session was read four times a
+second - a cross-process call each time - to feed a page the panel was not on;
+it now idles at one read every three seconds unless MUSIC is up, a page of
+yours shows the track, or the knob has been touched in the last fifteen
+seconds. And the volume line costs 15 ms to build, because it asks every
+application in the mixer where its slider is; that went from twice a second,
+for ever, to twice a second on the pages that actually show it and once every
+three elsewhere.
+
 ## The editor: a page you lay out yourself
 
 The board has a 5x7 font and about eight shapes. The PC has every font Windows
@@ -473,6 +488,12 @@ and the whole bar slides in again, the same nine pixels the board slides its
 own header, at the same speed. The bar, the name, the counter and the countdown
 together, because they are one thing.
 
+Renaming also wakes the panel. It had to: the board's header slides away after
+twenty idle seconds, and while you are typing at the PC the board has been idle
+the whole time - so the new title was arriving behind a bar that was not on
+screen, which looks exactly like nothing happening. `%wk` is one command that
+does nothing but say somebody is doing something meant to be seen.
+
 **Settings -> Screen -> How things appear** picks the style: *classic* down from
 the top, *wipe* in from the left like the splash, *type* a letter at a time, or
 *none*. Classic is the default because it is what the rest of the panel already
@@ -503,6 +524,12 @@ across but not down is something you can see. It only tells you: nothing snaps.
 A first version pulled the widget onto the centre from two pixels away, which
 is a deadzone by another name - you could not put something one pixel off
 centre if you wanted to.
+
+**The box is where the ink is.** PIL puts text down from the origin with the
+font's own bearing, so a line of letters starts a pixel or two right of and
+below where it was asked for - and a hitbox measured from the origin sat that
+far out of true, which is exactly how it felt. The editor now measures the ink,
+offset and all, and both the outline and what you can grab sit on it.
 
 **Size is not always yours to set.** Text is as wide as the text, so `w` and
 `h` were two numbers you could turn all day for nothing on a Number or a Text.

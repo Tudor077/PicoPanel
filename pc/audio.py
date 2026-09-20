@@ -386,6 +386,10 @@ class AudioBridge:
         self.send = send                # send(str) -> writes a line to the board
         self.log = log or (lambda *_: None)
         self.mixer = Mixer()
+        # Replaced by the app with something that knows which page is up.
+        self.wants = lambda: True
+        self.volume_wants = lambda: True
+        self.last_touch = 0.0
         # None means "nobody has chosen yet", and that is not the same as
         # Windows: until you pick one, the knob follows whatever is actually
         # playing, so opening Spotify puts the knob on Spotify. The moment you
@@ -447,6 +451,9 @@ class AudioBridge:
 
     def request(self, code):
         """Called from the serial reader. Returns at once."""
+        # Touching the volume counts as looking at the music: the level is on
+        # screen for a few seconds afterwards, and so is what is playing.
+        self.last_touch = time.time()
         self._q.put(int(code))
 
     # -- the work ---------------------------------------------------------
@@ -582,6 +589,19 @@ class AudioBridge:
         self.send(strip(2, nxt[0], nxt[1]) if nxt
                   else "%ky=2;at=0;w=0;d=")
 
+    def wanted(self):
+        """Is what's playing worth reading at all right now?
+
+        `wants` is set by the app from the page the board is on. Without it
+        this thread read the media session four times a second whatever was
+        on screen - and rendered a title strip every time one changed - to
+        feed a page nobody was looking at.
+        """
+        try:
+            return bool(self.wants())
+        except Exception:
+            return True
+
     def _run(self):
         while not self._stop.is_set():
             try:
@@ -602,9 +622,23 @@ class AudioBridge:
                         self._apply(c)
                     except Exception as e:
                         self.log("audio: %s: %s" % (type(e).__name__, e))
+            want = self.wanted()
+            if self.now:
+                self.now.want(want)
+            # The volume line costs 15 ms to build - a COM call per app in the
+            # mixer - and it is twice a second for ever. On a page that does
+            # not show it, once every three seconds is plenty: the board's own
+            # copy is only there so it can be drawn the moment you arrive.
+            hot = True
             try:
-                self.send(self.status_line())
-                if self.now:
+                hot = bool(self.volume_wants())
+            except Exception:
+                pass
+            self._beat = getattr(self, "_beat", 0) + 1
+            try:
+                if hot or code is not None or self._beat % 6 == 0:
+                    self.send(self.status_line())
+                if self.now and want:
                     snap = self.now.snapshot()
                     line = self._np_line(snap)
                     if line:
