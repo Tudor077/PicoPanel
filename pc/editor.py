@@ -238,6 +238,11 @@ class Editor(ttk.Frame):
             sp.bind("<KeyRelease>", lambda _e: self._edit())
             self.spins[name] = v
 
+        # A knob's detents per turn: a property of the encoder on your panel,
+        # not of this program. Twenty here, so eighteen degrees each.
+        self.turn_grp = ttk.Frame(row)
+        spin(self.turn_grp, "per turn", 2, 200)
+
         self.size_grp = ttk.Frame(row)
         spin(self.size_grp, "size", 6, 30)
         self.wh_grp = ttk.Frame(row)      # the anchor everything packs before
@@ -435,6 +440,12 @@ class Editor(ttk.Frame):
             self.size_grp.pack(side="left", before=self.wh_grp)
         else:
             self.size_grp.pack_forget()
+        if w.kind == "knob":
+            self.spins["per turn"].set(int(w.opts.get("per_turn",
+                                                      WG.DEFAULT_PER_TURN)))
+            self.turn_grp.pack(side="left", before=self.wh_grp)
+        else:
+            self.turn_grp.pack_forget()
         self.f_var.set(WG.FIELD_LABEL.get(w.field, w.field))
         self.l_var.set(w.label)
         self.spins["size"].set(w.size)
@@ -470,6 +481,11 @@ class Editor(ttk.Frame):
                     w.opts["fmt"] = key
                     break
         w.label = self.l_var.get()
+        if w.kind == "knob":
+            try:
+                w.opts["per_turn"] = max(2, int(self.spins["per turn"].get()))
+            except Exception:
+                pass
         try:
             w.size = int(self.spins["size"].get())
             w.w = int(self.spins["w"].get())

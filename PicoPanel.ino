@@ -171,6 +171,12 @@
                                 //  glued into one measurement)
 #define ENC_MIN           0
 #define ENC_MAX           100
+
+/* Detents in one full turn of the knob on THIS panel. 20 of them, so each is
+   18 degrees - which is what lets the drawn knob sit where the real one does
+   rather than somewhere proportional to a number. Change it for a different
+   encoder and the drawing follows. */
+#define ENC_PER_TURN      20
 #define SERIAL_HZ         5     // reports per second on Serial
 
 #define SCREEN_W       128
@@ -2987,13 +2993,34 @@ void drawSwPage() {
   drawSwRow(sw3, 21);
 }
 
+/* The knob, where the knob is. The mark is drawn at the angle the shaft is
+   actually at - detents since the last reset, wrapped to a turn, 18 degrees
+   each - so turning the real one a quarter turn turns this one a quarter turn.
+   A number climbing from 0 to 100 told you how far you had turned it, which is
+   a different question and the wrong one for a page called ENCODER. */
+static void drawEncKnob(int cx, int cy, int r, int32_t detents) {
+  oled->drawCircle(cx, cy, r, SSD1306_WHITE);
+  int32_t d = detents % ENC_PER_TURN;
+  if (d < 0) d += ENC_PER_TURN;
+  float a = (float)d * (2.0f * PI / ENC_PER_TURN) - PI / 2.0f;   // 0 = up
+  int mx = cx + (int)(cosf(a) * (r - 3));
+  int my = cy + (int)(sinf(a) * (r - 3));
+  oled->drawLine(cx, cy, mx, my, SSD1306_WHITE);
+  oled->fillCircle(mx, my, 1, SSD1306_WHITE);
+  oled->drawPixel(cx, cy - r, SSD1306_WHITE);      // twelve o'clock, for scale
+}
+
 void drawEnc() {
-  char v[8];
-  snprintf(v, sizeof(v), "%ld", (long)encValue);
-  oled->setTextSize(2);
-  oled->setCursor(2, gTop + 3);
-  oled->print(v);
+  const int r = 10;
+  drawEncKnob(2 + r, gTop + 1 + r, r, encTotal);
+
+  // The two numbers, small, beside it: what the knob is SET to, and how far it
+  // has been turned altogether.
   oled->setTextSize(1);
+  oled->setCursor(26, gTop + 2);
+  oled->print(F("v")); oled->print(encValue);
+  oled->setCursor(26, gTop + 12);
+  oled->print(F("t")); oled->print(encTotal);
 
   oled->setCursor(60, gTop + 2);
   oled->print(F("A"));  oled->print(digitalRead(PIN_ENC_A));

@@ -99,7 +99,7 @@ KIND_FIELDS = {
     "axis":  _AXES + ["throttle", "brake", "gforce", "aoa"],
     "btn":    ["none"],              # which button is a choice, not a field
     "btnrow": ["none"],
-    "knob":   ["enc", "enc_total", "fuel_pct", "np_pct", "throttle"],
+    "knob":   ["enc_total", "enc", "fuel_pct", "np_pct", "throttle"],
     "disc":   ["none"],
     "switch": ["none"],
     "alarm":  ["none"],
@@ -425,14 +425,32 @@ def _d_btnrow(d, w, data):
               _pressed(data, name))
 
 
+# Detents in one full turn of the knob on the panel. Twenty, so eighteen
+# degrees each. It is a property of the encoder, not of this program, so it is
+# a setting on the widget - a different knob has a different number.
+DEFAULT_PER_TURN = 20
+
+
 def _d_knob(d, w, data):
-    """The encoder as a knob: a ring with a mark. 300 degrees of travel, like
-    a real one - a full circle has no ends and no top."""
+    """The encoder as a knob, with the mark where the real shaft is.
+
+    Pointed at the running total, it turns as the real one turns: one detent,
+    one eighteenth of a circle, so a quarter turn of yours is a quarter turn of
+    this. Pointed at anything with a top and a bottom - the value, a fuel
+    gauge - it sweeps 300 degrees between them instead, because that has ends
+    and a full circle does not.
+    """
     import math
     r = max(3, min(w.w, w.h) // 2 - 1)
     cx, cy = w.x + w.w // 2, w.y + w.h // 2
     d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=1)
-    a = math.radians(-240 + 300 * _fraction(w, data))
+    turning = w.field in ("enc_total",) or w.opts.get("turn")
+    if turning:
+        per = int(w.opts.get("per_turn", DEFAULT_PER_TURN)) or DEFAULT_PER_TURN
+        a = math.radians(-90 + 360.0 * (int(_num(data, w.field)) % per) / per)
+        d.point((cx, cy - r), fill=1)          # twelve o'clock, for scale
+    else:
+        a = math.radians(-240 + 300 * _fraction(w, data))
     d.line([cx + math.cos(a) * r * 0.35, cy + math.sin(a) * r * 0.35,
             cx + math.cos(a) * r * 0.95, cy + math.sin(a) * r * 0.95], fill=1)
     if w.label:
@@ -547,7 +565,7 @@ PALETTE = [
     ("btn",   "Button",     dict(w=18, h=11, field="none",
                                  opts={"which": "A1"})),
     ("btnrow", "Button row", dict(w=128, h=10, field="none")),
-    ("knob",  "Knob",       dict(w=22, h=22, field="enc")),
+    ("knob",  "Knob",       dict(w=22, h=22, field="enc_total")),
     ("disc",  "Record",     dict(w=22, h=22, field="none")),
     ("switch", "Switch",    dict(w=40, h=10, field="none",
                                  opts={"which": "sw1"})),
@@ -567,7 +585,8 @@ ABOUT = {
     "axis": "two axes at once - the axis line shows when you are dead centre",
     "btn": "one button of the panel, lit while it is held",
     "btnrow": "all eight expander buttons, as the PANEL page has them",
-    "knob": "the encoder, as a knob with a mark",
+    "knob": "the encoder, as a knob - on the total it turns as the real one "
+            "does, a detent at a time",
     "disc": "the record from MUSIC, turning while something plays",
     "switch": "a slide switch, with the position it is in filled",
     "alarm": "how long until the next alarm - gone from the panel when there "

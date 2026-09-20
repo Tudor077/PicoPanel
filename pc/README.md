@@ -36,7 +36,12 @@ the IDE holds it, this app can't open it (and arduino-cli can't flash either).
 - lamps for the eight expander buttons (A1..A4, B1..B4) and for the d-pad
 - the position of both slide switches, under the names on the board: SW1 = 3
   positions, SW2 = 5 positions
-- the encoder's value as a bar, plus the total and the error count
+- the encoder's value as a bar, plus the total and the error count. **ENC** is
+  what the knob is set to: 0 to 100, clamped at both ends, 50 at power-up, and
+  what the volume and the d-pad's UP/DN move. **TOT** is every detent since the
+  last reset, signed and unbounded - turn it a full revolution forward and back
+  and ENC returns to where it was while TOT went 20 up and 20 down. TOT is what
+  the drawn knob's angle comes from, because it never runs out of travel
 - which page the OLED is showing, and whether the screen is answering
 - the HID state, with a button to arm and disarm it
 - **Mirror the OLED**: the panel's own screen, live, scaled 4x. The board
@@ -596,7 +601,7 @@ through the mirror and comparing: identical, byte for byte.
 | Axis | two axes at once, with the centre line lit when you are dead on it |
 | Button | one button of the panel, by name, lit while it is held |
 | Button row | all eight expander buttons, as the PANEL page has them |
-| Knob | the encoder, as a knob with a mark |
+| Knob | the encoder, as a knob with a mark where the real shaft is |
 | Record | the disc from MUSIC, turning while something plays |
 | Switch | a slide switch, with the position it is in filled |
 | Alarm in | how long until the next alarm - and nothing at all when there is none |
@@ -624,6 +629,18 @@ telemetry, it is a choice - so they get a **Which** dropdown instead of
 
 **The clock has a shape.** 24-hour, 12-hour, seconds, the date, the weekday, or
 the date and time together.
+
+**Knob**, pointed at the running total, turns as the real one turns: this
+panel's encoder has 20 detents in a revolution, so each is 18 degrees, and a
+quarter turn of yours is a quarter turn of the drawing. That number is a
+property of your encoder and not of this program, so it is a setting on the
+widget. Pointed at the *value* instead - or at a fuel gauge, or a track
+position - it sweeps 300 degrees between the ends, because those have ends and
+a full circle does not.
+
+The board's own ENCODER page draws the same knob, for the same reason: a number
+climbing from 0 to 100 answers "how far have I turned it", which is a different
+question from "where is it".
 
 **Axis** is the one widget that reads two fields - it grows a second row in
 the properties, for the up/down axis.
