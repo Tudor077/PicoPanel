@@ -81,6 +81,7 @@ def main():
         "--hidden-import", "widgets",
         "--hidden-import", "editor",
         "--hidden-import", "single",
+        "--hidden-import", "pagelist",
         "--hidden-import", "PIL.ImageFont",
         "--hidden-import", "PIL.ImageDraw",
         # UI Automation, for an app's own volume slider. comtypes builds the

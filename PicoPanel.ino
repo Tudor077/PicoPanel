@@ -343,10 +343,13 @@ static Marquee marq[6];
 
    Sent only while this page is actually showing - see !PAGE below. Streaming
    ten kilobytes a second at a page nobody is looking at would be silly. */
+// Above the buffers it sizes. The helper that turns a page number into a
+// slot stays down with the enum, which is what it needs.
+#define CUS_SLOTS 4
 #define CUS_BYTES 512
-uint8_t  cusBuf[CUS_BYTES];
-uint16_t cusLen  = 0;
-uint32_t cusSeen = 0;
+uint8_t  cusBuf[CUS_SLOTS][CUS_BYTES];
+uint16_t cusLen[CUS_SLOTS]  = { 0 };
+uint32_t cusSeen[CUS_SLOTS] = { 0 };
 #define CUS_STALE_MS 2500UL
 
 #define LYR_BMP_MAX 250
@@ -505,7 +508,9 @@ static bool audFresh() { return audSeen && (millis() - audSeen) < AUD_STALE_MS; 
 // Below the structs, not up with the buffer it reads: Arduino puts its
 // generated prototypes above the FIRST function definition in the file, and
 // from up there `struct SwGroup` does not exist yet.
-static bool cusFresh() { return cusLen && (millis() - cusSeen) < CUS_STALE_MS; }
+static bool cusFresh(int8_t sl) {
+  return sl >= 0 && cusLen[sl] && (millis() - cusSeen[sl]) < CUS_STALE_MS;
+}
 static bool npFresh()  { return npSeen  && (millis() - npSeen)  < NP_STALE_MS;  }
 static bool audShowing() { return audTouch && (millis() - audTouch) < AUD_SHOW_MS; }
 // The words are live when the PC is still talking to us AND says there are
@@ -586,8 +591,16 @@ volatile uint32_t encChgB = 0;
 volatile uint8_t  encTrig = '?';
 
 // ------------------------------------------------------------------ state --
-enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC, P_CUSTOM, P_HID, P_SW, P_ENC,
-            P_BTN, P_PCF, P_I2C, P_INFO, P_COUNT };
+enum Page { P_OVERVIEW = 0, P_GAME, P_MUSIC,
+            P_CUSTOM1, P_CUSTOM2, P_CUSTOM3, P_CUSTOM4,
+            P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO, P_COUNT };
+
+// Four of them, because one was not what was asked for: a custom page is a
+// page like any other and you want as many as you have ideas. Four fills the
+// rotation without filling the RAM - each is 512 bytes, the size of a frame.
+static inline int8_t cusSlotOf(uint8_t pg) {
+  return (pg >= P_CUSTOM1 && pg <= P_CUSTOM4) ? (int8_t)(pg - P_CUSTOM1) : -1;
+}
 
 // MUSIC has two faces: what's playing, and the words. A page of its own was
 // tried and it is one more thing to walk past - they are the same subject, and
@@ -596,8 +609,8 @@ uint8_t  musicSub = 0;      // 0 = now playing, 1 = karaoke
 #define MUSIC_SUBS 2
 
 const char *PAGE_NAME[P_COUNT] =
-  { "PANEL", "GAME", "MUSIC", "CUSTOM", "HID", "SWITCHES", "ENCODER", "BUTTONS",
-    "PCF8574", "I2C", "INFO" };
+  { "PANEL", "GAME", "MUSIC", "MINE 1", "MINE 2", "MINE 3", "MINE 4",
+    "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO" };
 
 uint8_t  page       = P_OVERVIEW;
 
@@ -613,9 +626,11 @@ uint8_t  page       = P_OVERVIEW;
 // the app, and read by audParse long before the drawing code exists.
 uint8_t  rpmStyle = 0;
 
-uint8_t  pageList[P_COUNT] = { P_OVERVIEW, P_GAME, P_MUSIC, P_CUSTOM, P_HID,
+// The extra custom pages start out of the rotation: four blank pages in
+// everyone's way would be a worse default than none.
+uint8_t  pageList[P_COUNT] = { P_OVERVIEW, P_GAME, P_MUSIC, P_CUSTOM1, P_HID,
                                P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO };
-uint8_t  pageListN = P_COUNT;
+uint8_t  pageListN = P_COUNT - 3;      // the three spare custom pages are out
 uint8_t  pageSlot  = 0;          // where we are in that list
 
 // Where a page sits in the list, or -1 if it has been left out of it.
@@ -1832,9 +1847,14 @@ void audParse(char *s) {
       lyrState = (uint8_t)atoi(val);
     }
     // "%cv=<base64>" - one whole frame for the custom page.
+    // "%cv=2,<base64>" - slot first, then a whole frame for it.
     else if (!strcasecmp(key, "cv")) {
-      uint16_t got = b64Decode(val, cusBuf, CUS_BYTES);
-      if (got) { cusLen = got; cusSeen = millis(); }
+      int slot = atoi(val);
+      const char *comma = strchr(val, ',');
+      if (comma && slot >= 0 && slot < CUS_SLOTS) {
+        uint16_t got = b64Decode(comma + 1, cusBuf[slot], CUS_BYTES);
+        if (got) { cusLen[slot] = got; cusSeen[slot] = millis(); }
+      }
     }
     /* "%pg=1,2,0,3" - the rotation, in order, by page number. Anything left
        out simply isn't in it. An empty or nonsense list is ignored rather
@@ -1864,9 +1884,29 @@ void audParse(char *s) {
     // "%gp=3" - show that page now. The app uses it as a preview: you click a
     // page in the list and the panel shows it, which beats any mock-up because
     // it is the real thing and cannot drift.
+    /* "%gs=2" / "%ms=1" - which sub-page of GAME or MUSIC. The app uses these
+       to walk every page AND every sub-page while it collects thumbnails, so
+       the pictures beside the list are the real screen rather than a guess at
+       what each page contains. */
+    else if (!strcasecmp(key, "gs")) {
+      uint8_t n = (uint8_t)atoi(val);
+      if (n < gameSubCount()) gameSub = n;
+    }
+    else if (!strcasecmp(key, "ms")) {
+      uint8_t n = (uint8_t)atoi(val);
+      if (n < MUSIC_SUBS) musicSub = n;
+    }
     else if (!strcasecmp(key, "gp")) {
       int id = atoi(val);
-      if (id >= 0 && id < P_COUNT) pageGoto((uint8_t)id);
+      if (id >= 0 && id < P_COUNT) {
+        // Shows ANY page, including one left out of the rotation - pageGoto
+        // refuses those, which is right for USER and wrong here: the app walks
+        // every page to photograph it, hidden ones included, and you want to
+        // look at a page before deciding to let it in.
+        page = (uint8_t)id;
+        int8_t sl = pageSlotOf(page);
+        if (sl >= 0) pageSlot = (uint8_t)sl;
+      }
     }
     else if (!strcasecmp(key, "pg")) {
       uint8_t tmp[P_COUNT], n = 0;
@@ -2029,18 +2069,6 @@ static void burnService() {
   step = (uint8_t)((step + 1) % 9);
   burnX = (int8_t)(step % 3) - 1;         // -1, 0, +1
   burnY = (int8_t)(step / 3) - 1;
-}
-
-/* The PC needs to know which page is showing, so it can send frames for the
-   custom one and stay quiet otherwise. Said on CHANGE rather than in the status
-   line, because the status line only goes out when reporting is switched on and
-   this has to work regardless. */
-static void pageAnnounce() {
-  static uint8_t said = 255;
-  if (page == said) return;
-  said = page;
-  Serial.print(F("!PAGE "));
-  Serial.println(page);
 }
 
 // Move the finished frame by (dx, dy). One pixel each way, which is all the
@@ -2511,7 +2539,8 @@ void drawAudioPicker() {
    is nothing to convert, and the header is deliberately overwritten: this page
    belongs to whoever laid it out, all thirty-two rows of it. */
 void drawCustom() {
-  if (!cusFresh()) {
+  int8_t sl = cusSlotOf(page);
+  if (!cusFresh(sl)) {
     oled->setTextSize(1);
     oled->setCursor(0, gTop + 2);
     oled->print(F("no layout yet"));
@@ -2520,8 +2549,8 @@ void drawCustom() {
     return;
   }
   uint16_t n = (uint16_t)SCREEN_W * oledH / 8;
-  if (n > cusLen) n = cusLen;
-  memcpy(oled->getBuffer(), cusBuf, n);
+  if (n > cusLen[sl]) n = cusLen[sl];
+  memcpy(oled->getBuffer(), cusBuf[sl], n);
 }
 
 void drawKaraoke() {
@@ -3393,7 +3422,8 @@ void render() {
     case P_MUSIC:
       if (musicSub == 1) drawKaraoke(); else drawMusic();
       break;
-    case P_CUSTOM:   drawCustom();   break;
+    case P_CUSTOM1: case P_CUSTOM2:
+    case P_CUSTOM3: case P_CUSTOM4:  drawCustom();   break;
     case P_GAME:     drawGame();     break;
   }
   // Only on the game page. That is the one held lit for hours, so it is the
@@ -3403,7 +3433,6 @@ void render() {
   //
   // The cycle keeps turning either way, so coming back to the game page does
   // not find it parked where you left it.
-  pageAnnounce();
   burnService();
   bool burnHere = (page == P_GAME && gameFresh());
   frameShift(burnHere ? burnX : 0, burnHere ? burnY : 0);
@@ -3888,7 +3917,8 @@ void printHelp() {
   Serial.println(F("    %rs=0|1      rev counter: 0 a bar, 1 a needle"));
   Serial.println(F("    %ic=100|400|1000  I2C kHz. No vsync exists on these"));
   Serial.println(F("    modules; a faster bus is what shortens the tear."));
-  Serial.println(F("    %cv=<base64>  one whole 512-byte frame for CUSTOM."));
+  Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..4"));
+  Serial.println(F("    %gs=n %ms=n   which sub-page of GAME / MUSIC"));
   Serial.println(F("    The board says '!PAGE n' when the page changes, so the"));
   Serial.println(F("    app knows when to send them."));
   Serial.println(F("    %gp=3        show that page now (the app's preview)"));
@@ -4317,6 +4347,25 @@ void setup() {
   core0Ready = true;
 }
 
+/* The PC needs to know which page is showing, so it can send frames for the
+   custom one and stay quiet otherwise. Said on CHANGE rather than in the status
+   line, because the status line only goes out when reporting is switched on and
+   this has to work regardless. */
+static void pageAnnounce() {
+  static uint8_t  said = 255;
+  static uint32_t lastSaid = 0;
+  uint32_t now = millis();
+  // On change, AND every couple of seconds regardless. Edge-triggered alone
+  // was wrong in a way that only showed up with the app started second: the
+  // board was already on the page, had already said so to nobody, and the app
+  // never found out. A repeat costs eight bytes and removes the whole class.
+  if (page == said && (now - lastSaid) < 2000UL) return;
+  said = page;
+  lastSaid = now;
+  Serial.print(F("!PAGE "));
+  Serial.println(page);
+}
+
 void loop() {
   static uint32_t tRender = 0, tSerial = 0, tFps = 0, tScan = 0;
   uint32_t now = millis();
@@ -4347,6 +4396,12 @@ void loop() {
   // Pages change with the onboard USER button, so no panel input is stolen by
   // the menu: every one of them stays with the PC.
   usrUpdate();
+  // On core0, with every other Serial.print in the program. Announcing from
+  // render() - which is core1 - put two cores on the same port, and the two
+  // interleaved mid-line: the app never saw a whole "!PAGE n" because it
+  // arrived buried inside a status line. Nothing complained; the line simply
+  // did not match.
+  pageAnnounce();
   // Before HID: on an audio page these inputs are the volume's, and hidUpdate()
   // is told to leave them alone.
   audioPageUpdate(det);

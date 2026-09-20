@@ -1,18 +1,16 @@
-"""The page editor: drag widgets onto a 128x32 canvas and watch them live.
+"""The page editor: take a widget off the shelf, drag it onto the screen.
 
 The preview is not a drawing of what the panel will show - it IS what the panel
 will show. The same `widgets.render` produces the image here and the 512 bytes
 that go down the wire, so the two cannot disagree.
 
-Frames are sent only while the board is actually on that page. It says so
-itself: `!PAGE n` whenever the page changes. Streaming ten kilobytes a second at
-a page nobody is looking at would be silly, and guessing from the status line
-would not work at all when reporting is switched off.
+Frames are sent only while the board is on that page. It says so itself with
+`!PAGE n` on every change; guessing from the status line would not work, because
+that only goes out when reporting is switched on.
 """
 
 import base64
 import io
-import json
 import tkinter as tk
 from tkinter import ttk
 
@@ -37,17 +35,17 @@ def _photo(img, size=None):
     return tk.PhotoImage(data=base64.b64encode(buf.getvalue()))
 
 
-# Made-up numbers for the palette icons, so a bar is half full and a needle
-# points somewhere rather than every icon sitting at zero and looking alike.
+# Made-up numbers for the shelf, so a bar is half full and a needle points
+# somewhere rather than every icon sitting at zero and looking alike.
 ICON_DATA = {"speed_kmh": 88, "rpm": 4200, "rpm_max": 7000, "fuel_pct": 62,
              "brake": 1, "throttle": 0.6, "src": "ABC", "gear": 3}
 
 
-def _icon(kind, defaults, zoom=2):
+def icon(kind, defaults, zoom=2):
     """A picture of the widget itself, drawn by the widget's own code.
 
-    Not a hand-drawn glyph: this way an icon cannot come to mean something the
-    widget no longer does, and a new widget gets an icon for free.
+    Not a hand-drawn glyph: an icon drawn separately can come to mean something
+    the widget no longer does, and this way a new widget gets one for free.
     """
     w = WG.Widget(kind=kind, x=1, y=1, **defaults)
     img = WG.Image.new("1", (w.w + 2, w.h + 2), 0)
@@ -61,87 +59,150 @@ def _icon(kind, defaults, zoom=2):
 
 
 class Editor(ttk.Frame):
-    def __init__(self, master, app):
+    """One custom page. `slot` says which of the board's four it is."""
+
+    def __init__(self, master, app, slot=0):
         super().__init__(master)
         self.app = app
-        self.items = [WG.Widget.from_dict(d)
-                      for d in (app.cfg.get("custom_page") or [])]
+        self.slot = slot
+        self.items = [WG.Widget.from_dict(d) for d in app.layout_of(slot)]
         self.sel = None
         self._drag = None
+        self._dnd = None            # (kind, defaults) while dragging off the shelf
+        self._ghost = None
         self._photo_ref = None
         self._build()
         self._tick()
 
     # ------------------------------------------------------------ building
     def _build(self):
-        pal = ttk.Frame(self)
-        pal.pack(fill="x", padx=8, pady=(8, 4))
-        ttk.Label(pal, text="Drop one on:").pack(side="left", padx=(0, 6))
-        # Kept on the instance: a PhotoImage that nothing references is
-        # collected, and the button then shows an empty square.
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True)
+
+        # ---- the shelf, down the side. Vertical because each item is a
+        # picture of a widget and pictures want to be side by side with their
+        # names, not stacked under them in a row that runs off the window.
+        shelf = ttk.LabelFrame(body, text="Widgets")
+        shelf.pack(side="left", fill="y", padx=8, pady=8)
+        ttk.Label(shelf, foreground="#666", wraplength=150, justify="left",
+                  text="Pick one up and drop it on the screen."
+                  ).pack(anchor="w", padx=6, pady=(4, 6))
         self._icons = []
         for kind, label, defaults in WG.PALETTE:
+            row = ttk.Frame(shelf)
+            row.pack(fill="x", padx=6, pady=3)
             try:
-                img = _icon(kind, defaults)
-                self._icons.append(img)
-            except Exception:
+                img = icon(kind, defaults)
+                self._icons.append(img)       # a PhotoImage nothing holds is
+            except Exception:                 # collected, and the row goes blank
                 img = None
-            ttk.Button(pal, text=label, image=img, compound="top",
-                       command=lambda k=kind, d=defaults: self._add(k, d)
-                       ).pack(side="left", padx=3)
-        ttk.Button(pal, text="Delete", width=8,
-                   command=self._delete).pack(side="right", padx=2)
+            lab = tk.Label(row, image=img, bd=1, relief="solid", bg="#0a0c0e",
+                           cursor="hand2")
+            lab.pack(side="left")
+            ttk.Label(row, text=label).pack(side="left", padx=6)
+            for wdg in (lab, row):
+                wdg.bind("<ButtonPress-1>",
+                         lambda e, k=kind, d=defaults: self._pick(k, d, e))
+                wdg.bind("<B1-Motion>", self._haul)
+                wdg.bind("<ButtonRelease-1>", self._drop)
 
-        self.canvas = tk.Canvas(self, width=CW, height=CH, bg="#0a0c0e",
+        right = ttk.Frame(body)
+        right.pack(side="left", fill="both", expand=True, pady=8)
+
+        self.canvas = tk.Canvas(right, width=CW, height=CH, bg="#0a0c0e",
                                 highlightthickness=1, highlightbackground="#555")
-        self.canvas.pack(padx=8, pady=4)
+        self.canvas.pack(padx=8)
         self.canvas.bind("<Button-1>", self._down)
         self.canvas.bind("<B1-Motion>", self._move)
         self.canvas.bind("<ButtonRelease-1>", self._up)
 
-        ttk.Label(self, foreground="#555", wraplength=520, justify="left",
-                  text="Drag to place. This preview is the picture the panel "
-                       "gets, drawn by the same code - it cannot drift. The "
-                       "page is sent only while the board is showing it."
-                  ).pack(anchor="w", padx=8)
+        ttk.Label(right, foreground="#555", wraplength=CW, justify="left",
+                  text="This preview is the picture the panel gets, drawn by "
+                       "the same code - it cannot drift. The page is sent only "
+                       "while the board is showing it."
+                  ).pack(anchor="w", padx=8, pady=(4, 0))
 
-        props = ttk.LabelFrame(self, text="Selected widget")
+        props = ttk.LabelFrame(right, text="Selected widget")
         props.pack(fill="x", padx=8, pady=6)
         row = ttk.Frame(props)
         row.pack(fill="x", padx=6, pady=4)
 
         ttk.Label(row, text="Shows").pack(side="left")
         self.f_var = tk.StringVar()
-        self.f_box = ttk.Combobox(row, textvariable=self.f_var, width=16,
+        self.f_box = ttk.Combobox(row, textvariable=self.f_var, width=15,
                                   state="readonly",
                                   values=[lbl for _k, lbl in WG.FIELDS])
         self.f_box.pack(side="left", padx=4)
         self.f_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
 
-        ttk.Label(row, text="Label").pack(side="left", padx=(10, 0))
+        ttk.Label(row, text="Label").pack(side="left", padx=(8, 0))
         self.l_var = tk.StringVar()
-        e = ttk.Entry(row, textvariable=self.l_var, width=10)
+        e = ttk.Entry(row, textvariable=self.l_var, width=8)
         e.pack(side="left", padx=4)
         e.bind("<KeyRelease>", lambda _e: self._edit())
 
         self.spins = {}
         for name, lo, hi in (("size", 6, 30), ("w", 1, WG.W), ("h", 1, WG.H)):
-            ttk.Label(row, text=name).pack(side="left", padx=(10, 0))
+            ttk.Label(row, text=name).pack(side="left", padx=(8, 0))
             v = tk.IntVar()
-            s = ttk.Spinbox(row, from_=lo, to=hi, width=4, textvariable=v,
-                            command=self._edit)
-            s.pack(side="left", padx=2)
-            s.bind("<KeyRelease>", lambda _e: self._edit())
+            sp = ttk.Spinbox(row, from_=lo, to=hi, width=4, textvariable=v,
+                             command=self._edit)
+            sp.pack(side="left", padx=2)
+            sp.bind("<KeyRelease>", lambda _e: self._edit())
             self.spins[name] = v
+        ttk.Button(row, text="Delete", command=self._delete).pack(side="right")
 
-    # ------------------------------------------------------------- editing
-    def _add(self, kind, defaults):
-        w = WG.Widget(kind=kind, x=4, y=4, **defaults)
+    # ------------------------------------------------ off the shelf and on
+    def _pick(self, kind, defaults, ev):
+        """Lift a widget off the shelf. The thing that follows the pointer is a
+        borderless window with the icon in it - Tk has no drag and drop of its
+        own, and a ghost you can see is the difference between dragging and
+        clicking and hoping."""
+        self._dnd = (kind, defaults)
+        try:
+            self._ghost = tk.Toplevel(self)
+            self._ghost.overrideredirect(True)
+            self._ghost.attributes("-topmost", True)
+            img = icon(kind, defaults)
+            self._ghost_img = img
+            tk.Label(self._ghost, image=img, bd=0, bg="#0a0c0e").pack()
+            self._haul(ev)
+        except Exception:
+            self._ghost = None
+
+    def _haul(self, ev):
+        if self._ghost is None:
+            return
+        try:
+            self._ghost.geometry("+%d+%d" % (ev.x_root + 8, ev.y_root + 8))
+        except Exception:
+            pass
+
+    def _drop(self, ev):
+        kind_def, self._dnd = self._dnd, None
+        if self._ghost is not None:
+            self._ghost.destroy()
+            self._ghost = None
+        if not kind_def:
+            return
+        kind, defaults = kind_def
+        # Where did it land? Screen coordinates into canvas coordinates - the
+        # pointer is what the user aimed with, not the widget it started on.
+        cx = self.canvas.winfo_rootx()
+        cy = self.canvas.winfo_rooty()
+        x = (ev.x_root - cx) // ZOOM
+        y = (ev.y_root - cy) // ZOOM
+        if not (0 <= x < WG.W and 0 <= y < WG.H):
+            return                      # dropped off the screen: nothing added
+        w = WG.Widget(kind=kind, **defaults)
+        w.x = max(0, min(WG.W - 1, int(x - w.w // 2)))
+        w.y = max(0, min(WG.H - 1, int(y - w.h // 2)))
         self.items.append(w)
         self.sel = w
         self._show_props()
         self._save()
 
+    # ------------------------------------------------------------- editing
     def _delete(self):
         if self.sel in self.items:
             self.items.remove(self.sel)
@@ -149,8 +210,6 @@ class Editor(ttk.Frame):
             self._save()
 
     def _hit(self, x, y):
-        """Topmost widget under the point, so the thing you see on top is the
-        thing you grab."""
         for w in reversed(self.items):
             if w.x <= x < w.x + max(w.w, 4) and w.y <= y < w.y + max(w.h, 4):
                 return w
@@ -204,8 +263,7 @@ class Editor(ttk.Frame):
         self._save()
 
     def _save(self):
-        self.app.cfg["custom_page"] = [w.to_dict() for w in self.items]
-        self.app.save_cfg()
+        self.app.set_layout(self.slot, [w.to_dict() for w in self.items])
 
     # ------------------------------------------------------------ painting
     def _tick(self):
@@ -227,8 +285,20 @@ class Editor(ttk.Frame):
 
     # -------------------------------------------------------------- output
     def frame_bytes(self):
-        """The 512 bytes for the board, or None."""
         img = WG.render(self.items, self.app.widget_data())
-        if img is None:
-            return None
-        return WG.to_frame(img)
+        return None if img is None else WG.to_frame(img)
+
+
+class EditorWindow(tk.Toplevel):
+    """The editor on its own, opened by double-clicking a page."""
+
+    def __init__(self, app, slot, title):
+        super().__init__(app)
+        self.title("PicoPanel - %s" % title)
+        self.transient(app)
+        self.editor = Editor(self, app, slot)
+        self.editor.pack(fill="both", expand=True)
+        try:
+            self.iconbitmap(app.icon_path)
+        except Exception:
+            pass

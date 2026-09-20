@@ -36,6 +36,8 @@ from telemetry.sources import ALL
 import audio
 import autostart
 import editor
+import pagelist
+import widgets as WG
 import settings
 import single
 
@@ -55,14 +57,13 @@ STALE_S = 2.0
 # The board's pages, in the order of its own enum - the app talks about them
 # by number, so this list IS the protocol. It had fallen behind: MUSIC was
 # added to the board and not here, so every label after it was one out.
-PAGE_NAMES = ["PANEL", "GAME", "MUSIC", "CUSTOM", "HID", "SWITCHES",
-              "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO"]
-P_CUSTOM = 3
+PAGE_NAMES = ["PANEL", "GAME", "MUSIC", "MINE 1", "MINE 2", "MINE 3", "MINE 4",
+              "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO"]
+# The board keeps four pages that the PC draws. They are pages like any other -
+# they sit in the rotation, they can be dragged about, and three of them start
+# outside it because four blank pages in everyone's way is a worse default.
+CUSTOM_FIRST, CUSTOM_N = 3, 4
 
-# The preview beside the page list. Smaller than the big mirror on the Panel
-# tab - it is there to tell you which page you are looking at, not to read.
-PREVIEW_SCALE = 2
-WG_W, WG_H = 128, 32
 PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
 # The mirrored screen, drawn this many times larger than the real 128x32 panel.
@@ -317,6 +318,7 @@ class App(tk.Tk):
             _ico = os.path.join(tempfile.gettempdir(), "picopanel_win.ico")
             _icon.save_ico(_ico)
             self.iconbitmap(default=_ico)       # default: every window we open
+            self.icon_path = _ico               # the editor window wants it too
         except Exception:
             pass                                # an icon is never worth a crash
         self.geometry("880x660")
@@ -499,7 +501,7 @@ class App(tk.Tk):
 
         self._build_settings()
 
-        self.editor = editor.Editor(self.tabs, self)
+        self.editor = editor.Editor(self.tabs, self, slot=0)
         self.tabs.add(self.editor, text="Widgets")
         self.tabs.bind("<<NotebookTabChanged>>", self._preview_follow)
 
@@ -583,52 +585,11 @@ class App(tk.Tk):
 
         # ---- the rotation
         rot = ttk.LabelFrame(page, text="Pages on the panel")
-        rot.pack(side="left", fill="y", **pad)
-        ttk.Label(rot, wraplength=300, justify="left",
-                  text="USER walks this list, in this order. Drag a row to move "
-                       "it; clicking one also shows it on the panel, so the "
-                       "preview is the real screen. A page you never look at is "
-                       "not worth three presses to get past, so take it out."
-                  ).pack(padx=8, pady=(6, 2), anchor="w")
+        rot.pack(side="left", fill="both", expand=True, **pad)
 
-        cols = ttk.Frame(rot)
-        cols.pack(fill="both", expand=True, padx=8, pady=6)
 
-        shown = ttk.Frame(cols)
-        shown.pack(side="left", fill="y")
-        ttk.Label(shown, text="In the rotation").pack(anchor="w")
-        self.pg_in = tk.Listbox(shown, height=11, width=16, exportselection=False)
-        self.pg_in.pack()
-        # Drag a row to move it. The buttons beside it still work - they are
-        # better for one step at a time - but picking a page up and putting it
-        # where you want it is what you actually mean by "in this order".
-        self.pg_in.bind("<Button-1>", self._pg_grab)
-        self.pg_in.bind("<B1-Motion>", self._pg_drag)
-        self.pg_in.bind("<ButtonRelease-1>", self._pg_drop)
-
-        mid = ttk.Frame(cols)
-        mid.pack(side="left", fill="y", padx=6)
-        ttk.Label(mid, text=" ").pack()
-        for text, fn in (("\u25b2", lambda: self._pg_move(-1)),
-                         ("\u25bc", lambda: self._pg_move(1)),
-                         ("\u2192", self._pg_hide),
-                         ("\u2190", self._pg_show)):
-            ttk.Button(mid, text=text, width=3, command=fn).pack(pady=2)
-
-        hidden = ttk.Frame(cols)
-        hidden.pack(side="left", fill="y")
-        ttk.Label(hidden, text="Not shown").pack(anchor="w")
-        self.pg_out = tk.Listbox(hidden, height=11, width=16, exportselection=False)
-        self.pg_out.pack()
-
-        prev = ttk.Frame(rot)
-        prev.pack(fill="x", padx=8, pady=(0, 6))
-        ttk.Label(prev, text="What the panel is showing").pack(anchor="w")
-        self.pg_prev = tk.Canvas(prev, width=WG_W * PREVIEW_SCALE,
-                                 height=WG_H * PREVIEW_SCALE, bg="#0a0c0e",
-                                 highlightthickness=1,
-                                 highlightbackground="#555")
-        self.pg_prev.pack(anchor="w", pady=2)
+        self.pg_cards = pagelist.PageList(rot, self)
+        self.pg_cards.pack(fill="both", expand=True, padx=8, pady=6)
 
         pre = ttk.Frame(rot)
         pre.pack(fill="x", padx=8, pady=(0, 8))
@@ -699,17 +660,69 @@ class App(tk.Tk):
         self._pg_load()
 
     # ---- the page rotation ----------------------------------------------
+    # ---- the pages -------------------------------------------------------
+    def page_name(self, pg):
+        return PAGE_NAMES[pg] if 0 <= pg < len(PAGE_NAMES) else "?"
+
+    def slot_of(self, pg):
+        """Which of the four pages you draw yourself, or None."""
+        i = pg - CUSTOM_FIRST
+        return i if 0 <= i < CUSTOM_N else None
+
+    def layout_of(self, slot):
+        return list((self.cfg.get("layouts") or {}).get(str(slot)) or [])
+
+    def set_layout(self, slot, dicts):
+        lay = dict(self.cfg.get("layouts") or {})
+        lay[str(slot)] = dicts
+        self.cfg["layouts"] = lay
+        settings.save(self.cfg)
+
+    def pg_show(self, pg):
+        """Put that page on the panel, so the card you clicked is the thing you
+        are looking at."""
+        self.link.send("%%gp=%d" % pg, echo=False)
+
+    def pg_open(self, pg):
+        """Double-click: lay this page out. Only your own pages have a layout -
+        the rest are drawn by the board and there is nothing here to edit."""
+        slot = self.slot_of(pg)
+        if slot is None:
+            return
+        win = getattr(self, "_edit_wins", {}).get(slot)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            return
+        if not hasattr(self, "_edit_wins"):
+            self._edit_wins = {}
+        self._edit_wins[slot] = editor.EditorWindow(self, slot, self.page_name(pg))
+        self.pg_show(pg)          # and show it, so you can see what you draw
+
+    def pg_toggle(self, pg):
+        order, rest = self._pg_ids
+        if pg in order:
+            if len(order) < 2:
+                return            # never leave the panel with nothing to show
+            order.remove(pg)
+            rest.append(pg)
+        else:
+            rest.remove(pg)
+            order.append(pg)
+        rest.sort()
+        self.pg_cards.refill()
+        self.pg_apply()
+
+    def pg_apply(self):
+        self._pg_apply()
+
     def _pg_load(self):
-        order = list(self.cfg.get("page_order") or range(len(PAGE_NAMES)))
+        order = list(self.cfg.get("page_order") or
+                     [i for i in range(len(PAGE_NAMES))
+                      if self.slot_of(i) in (None, 0)])
         order = [i for i in order if 0 <= i < len(PAGE_NAMES)]
         rest = [i for i in range(len(PAGE_NAMES)) if i not in order]
-        self.pg_in.delete(0, "end")
-        self.pg_out.delete(0, "end")
-        for i in order:
-            self.pg_in.insert("end", PAGE_NAMES[i])
-        for i in rest:
-            self.pg_out.insert("end", PAGE_NAMES[i])
         self._pg_ids = (order, rest)
+        self.pg_cards.refill()
 
     def _pg_apply(self):
         order, rest = self._pg_ids
@@ -760,76 +773,48 @@ class App(tk.Tk):
             settings.save(self.cfg)
             self._preset_refresh()
 
-    # ---- dragging a row --------------------------------------------------
-    def _pg_grab(self, ev):
-        self._pg_from = self.pg_in.nearest(ev.y)
-        # Clicking a page also shows it on the panel. That is the preview: the
-        # real screen, which cannot drift from what the firmware draws.
-        order, _rest = self._pg_ids
-        if 0 <= self._pg_from < len(order):
-            self.link.send("%%gp=%d" % order[self._pg_from], echo=False)
+    # ---- collecting the pictures -----------------------------------------
+    def collect_shots(self, done):
+        """Walk every page, photograph it, put the panel back.
 
-    def _pg_drag(self, ev):
-        order, _rest = self._pg_ids
-        i = getattr(self, "_pg_from", None)
-        if i is None:
+        A chain of after() calls rather than a loop with sleeps: the frames
+        arrive on the reader thread and are drained by this one, so a loop that
+        waited here would wait for pictures it was itself preventing.
+        """
+        if not self.link.open:
+            self._log("connect first - the pictures come from the board", "err")
             return
-        j = max(0, min(len(order) - 1, self.pg_in.nearest(ev.y)))
-        if j == i:
+        if not self.mirror_var.get():
+            self.mirror_var.set(True)
+            self._toggle_mirror()
+        self._shot_home = self.link.board_page
+        self._shot_queue = list(range(len(PAGE_NAMES)))
+        self._shot_done = done
+        self.after(250, self._shot_step)
+
+    def _shot_step(self):
+        if not self._shot_queue:
+            if self._shot_home is not None and self._shot_home >= 0:
+                self.pg_show(self._shot_home)
+            self._log("page pictures updated", "info")
             return
-        order.insert(j, order.pop(i))
-        self._pg_from = j
-        self.pg_in.delete(0, "end")
-        for k in order:
-            self.pg_in.insert("end", PAGE_NAMES[k])
-        self.pg_in.selection_clear(0, "end")
-        self.pg_in.selection_set(j)
+        pg = self._shot_queue.pop(0)
+        self.pg_show(pg)
+        self.after(pagelist.SETTLE_MS, lambda p=pg: self._shot_grab(p))
 
-    def _pg_drop(self, _ev):
-        if getattr(self, "_pg_from", None) is not None:
-            self._pg_apply()
-        self._pg_from = None
-
-    def _pg_move(self, by):
-        sel = self.pg_in.curselection()
-        if not sel:
-            return
-        i = sel[0]
-        order, rest = self._pg_ids
-        j = i + by
-        if not (0 <= j < len(order)):
-            return
-        order[i], order[j] = order[j], order[i]
-        self._pg_refill(sel_in=j)
-
-    def _pg_hide(self):
-        sel = self.pg_in.curselection()
-        order, rest = self._pg_ids
-        if not sel or len(order) < 2:
-            return                      # never leave the panel with no pages
-        rest.append(order.pop(sel[0]))
-        self._pg_refill()
-
-    def _pg_show(self):
-        sel = self.pg_out.curselection()
-        if not sel:
-            return
-        order, rest = self._pg_ids
-        order.append(rest.pop(sel[0]))
-        self._pg_refill(sel_in=len(order) - 1)
-
-    def _pg_refill(self, sel_in=None):
-        order, rest = self._pg_ids
-        self.pg_in.delete(0, "end")
-        self.pg_out.delete(0, "end")
-        for i in order:
-            self.pg_in.insert("end", PAGE_NAMES[i])
-        for i in rest:
-            self.pg_out.insert("end", PAGE_NAMES[i])
-        if sel_in is not None:
-            self.pg_in.selection_set(sel_in)
-            self.pg_in.activate(sel_in)
-        self._pg_apply()
+    def _shot_grab(self, pg):
+        fb = getattr(self, "_last_fb", None)
+        photo = None
+        if fb:
+            try:
+                photo = pagelist.frame_photo(*fb)
+            except Exception:
+                photo = None
+        try:
+            self._shot_done(pg, photo)
+        except Exception:
+            pass
+        self.after(30, self._shot_step)
 
     # ---- the screen ------------------------------------------------------
     def _apply_rpm(self):
@@ -1106,16 +1091,19 @@ class App(tk.Tk):
                 if self.link.send(tel.to_line(), echo=False):
                     self.hub.sent += 1
 
-            # The custom page, but only while the board is actually showing it.
+            # Whichever of your pages is showing, and only while it is. The
+            # picture is rendered from the stored layout rather than from an
+            # editor window: the page has to work with every window closed.
             now = time.time()
-            if (self.link.open and self.link.board_page == P_CUSTOM
-                    and now >= next_page):
+            slot = self.slot_of(self.link.board_page) if self.link.open else None
+            if slot is not None and now >= next_page:
                 next_page = now + page_period
                 try:
-                    frame = self.editor.frame_bytes()
-                    if frame:
-                        self.link.send("%%cv=%s" % base64.b64encode(frame).decode(),
-                                       echo=False)
+                    items = [WG.Widget.from_dict(d) for d in self.layout_of(slot)]
+                    img = WG.render(items, self.widget_data())
+                    if img is not None:
+                        b = base64.b64encode(WG.to_frame(img)).decode()
+                        self.link.send("%%cv=%d,%s" % (slot, b), echo=False)
                 except Exception:
                     pass                # a bad layout must not stop telemetry
 
@@ -1181,27 +1169,15 @@ class App(tk.Tk):
         self.mirror_canvas.create_image(0, 0, image=img, anchor="nw")
         self._fb_img = img           # keep it alive, or Tk shows nothing
 
-        # The Settings tab shows the same frame, smaller: the preview beside the
-        # page list is the real panel, not a drawing of it.
-        self._paint_preview(w, h, rows)
+        # Kept for the page cards: they are photographed by driving the board
+        # from page to page and taking whatever the mirror last sent.
+        self._last_fb = (w, h, data)
 
         if not self.mirror_var.get():
             # Frames arrived without us asking - the board was already mirroring
             # (someone typed 'o' on it). Follow what's actually happening.
             self.mirror_var.set(True)
         self.mirror_lbl.configure(text=f"{w}x{h} live", foreground="#0a6")
-
-    def _paint_preview(self, w, h, rows):
-        cv = getattr(self, "pg_prev", None)
-        if cv is None:
-            return
-        img = tk.PhotoImage(width=w, height=h)
-        img.put(" ".join(rows))
-        img = img.zoom(PREVIEW_SCALE)
-        cv.configure(width=w * PREVIEW_SCALE, height=h * PREVIEW_SCALE)
-        cv.delete("all")
-        cv.create_image(0, 0, image=img, anchor="nw")
-        self._pg_prev_img = img
 
     def _preview_follow(self, _ev=None):
         """Turn the board's mirror on while the Settings tab is up, and put it
