@@ -392,6 +392,7 @@ class App(tk.Tk):
         self.last_send = 0.0
         self._fb_seq = 0        # frames arrived, so the walk can wait for new ones
         self._typing = {}       # header text that is still arriving
+        self._save_at = {}      # slot -> when to write it to the board's flash
         self._hdr_pos = None    # where our header bar is, in pixels
         self._hdr_t = time.time()
         self.hold_until = 0.0   # don't reconnect before this
@@ -806,6 +807,7 @@ class App(tk.Tk):
         settings.save(self.cfg)
         self.pg_cards.refill()
         self.wake_panel()
+        self.keep_page(slot)
 
     def page_of(self, slot):
         """The page number of one of your slots."""
@@ -821,8 +823,20 @@ class App(tk.Tk):
         self.cfg["page_headers"] = h
         settings.save(self.cfg)
         self.wake_panel()
+        self.keep_page(slot)
 
-    def header_for(self, slot):
+    def keep_page(self, slot):
+        """Note that this page has changed.
+
+        It used to ask the board to write the picture into its flash, so the
+        page survived a power cut. That wedged the board: the write has to park
+        the core that draws the screen, and parking it never came back. The
+        page now lives in the board's RAM, which keeps it with this app closed
+        but not across an unplug. See the note in the firmware.
+        """
+        self._save_at[slot] = time.time() + 1.0
+
+    def header_for(self, slot, still=False):
         """The two strings the header shows: the name, and where the page sits
         in the rotation - the same counter the board puts on its own pages."""
         if not self.header_of(slot):
@@ -836,6 +850,10 @@ class App(tk.Tk):
         # yours slides with it and goes away when the panel goes quiet. The
         # fourth is the countdown, which does NOT go away with it: the board
         # keeps showing it on its own pages too.
+        if still:
+            # The picture that gets kept: header down, no countdown. A frozen
+            # "3 hours to go" would still be saying it next week.
+            return (name, where, 0, "", 1.0)
         shift, reveal = self._hdr_shift(), 1.0
         p = self._progress(slot, name, where, bool(badge))
         style = self.cfg.get("anim_style", "classic")
@@ -998,6 +1016,7 @@ class App(tk.Tk):
             d = dict(self.cfg.get(key) or {})
             d.pop(str(slot), None)
             self.cfg[key] = d
+        self._save_at.pop(slot, None)
         settings.save(self.cfg)
         order, rest = self._pg_ids
         if pg in order:
@@ -1016,6 +1035,7 @@ class App(tk.Tk):
         lay[str(slot)] = dicts
         self.cfg["layouts"] = lay
         settings.save(self.cfg)
+        self.keep_page(slot)
 
     def subs_of(self, pg):
         """How many faces that page has, as the board last said. One until it
@@ -1740,6 +1760,7 @@ class App(tk.Tk):
                     if img is not None:
                         b = base64.b64encode(WG.to_frame(img)).decode()
                         self.link.send("%%cv=%d,%s" % (slot, b), echo=False)
+                    self._save_at.pop(slot, None)
                 except Exception as e:
                     # Once. A page that quietly stops being sent looks exactly
                     # like a page nobody has drawn yet, and the board says so

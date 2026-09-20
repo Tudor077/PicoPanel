@@ -386,6 +386,18 @@ Eight is where it stops, because each one is a whole 512-byte frame of the
 board's RAM. Only the ones you have made appear in the list - an empty `MINE 6`
 nobody asked for is clutter, not a feature.
 
+**The page stays when the app closes.** The picture only arrives while the app
+is running, and the board used to blank it two and a half seconds later - so
+the page existed only while something was watching it. The last frame sent now
+stays on the panel until the board is unplugged.
+
+Across an unplug it does not survive, and the attempt to make it is worth
+recording: writing the frame into the board's flash means parking the core that
+draws the screen, because nothing may execute from flash while it is being
+erased. `rp2040.idleOtherCore()` parked it and it never came back - the board
+went deaf on USB, would not answer the 1200-baud reset, and had to be recovered
+with BOOTSEL. The feature is not worth that, and it is not there.
+
 Each has its own layout, kept by the app. The board is sent the finished picture
 for whichever one it is showing - the page works with every editor window
 closed. A page you

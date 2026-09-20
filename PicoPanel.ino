@@ -2610,7 +2610,11 @@ void drawAudioPicker() {
    belongs to whoever laid it out, all thirty-two rows of it. */
 void drawCustom() {
   int8_t sl = cusSlotOf(page);
-  if (!cusFresh(sl)) {
+  // Whatever is in the buffer, fresh or not. The picture only arrives while
+  // the app is running, and going blank two and a half seconds after it
+  // closed meant the page existed only while something was watching it. The
+  // last thing sent stays until the board is unplugged.
+  if (sl < 0 || !cusLen[sl]) {
     oled->setTextSize(1);
     oled->setCursor(0, gTop + 2);
     oled->print(F("no layout yet"));
