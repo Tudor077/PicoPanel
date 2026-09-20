@@ -666,6 +666,35 @@ char     alarmText[24] = "";
    pending, and then nothing is drawn at all. */
 uint32_t alarmDueAt = 0;        // millis() when it is due
 char     alarmWhat[20] = "";
+uint32_t alarmNaAt  = 0;        // when the app last told us about that one
+
+/* ---- the board's own clock and alarm list -------------------------------
+   The app sends the time and the list; the board keeps them and rings by
+   itself, so an alarm still goes off with the app shut or the PC asleep.
+
+   There is no battery behind this clock. Unplug the board and it forgets the
+   time, and the list with it, until the app connects and says so again - which
+   it does within a second of starting. A panel that is plugged in is a panel
+   that knows what time it is. */
+#define ALARM_MAX 8
+struct BoardAlarm {
+  uint16_t at;                  // minutes since local midnight
+  char     text[16];
+};
+BoardAlarm boardAlarms[ALARM_MAX];
+uint8_t  boardAlarmN = 0;
+uint32_t clockSecs   = 0;       // seconds since local midnight, at clockAt
+uint32_t clockAt     = 0;       // millis() when that was true
+bool     clockKnown  = false;
+int16_t  alarmRang   = -1;      // the minute already rung, so it rings once
+
+// Seconds since local midnight, now. Counted off millis() from the last time
+// the app said - a few seconds a day of drift, and it is re-told on every
+// connect and every few minutes after that.
+static uint32_t localSecs() {
+  if (!clockKnown) return 0;
+  return (clockSecs + (millis() - clockAt) / 1000UL) % 86400UL;
+}
 
 // The spare custom pages start out of the rotation: seven blank pages in
 // everyone's way would be a worse default than none. The app puts them in as
@@ -1968,6 +1997,7 @@ void audParse(char *s) {
         alarmWhat[sizeof(alarmWhat) - 1] = 0;
       }
       alarmDueAt = (secs > 0) ? (millis() + (uint32_t)secs * 1000UL) : 0;
+      alarmNaAt  = millis();
     }
     /* "%wk" - somebody is doing something at the PC end that is meant to be
        seen here: renaming a page, moving one. The panel has no way to know
@@ -1994,6 +2024,40 @@ void audParse(char *s) {
     else if (!strcasecmp(key, "hs")) {
       uint8_t st = (uint8_t)atoi(val);
       if (st <= 3) hdrStyle = st;
+    }
+    /* "%tm=48273" - seconds since local midnight. The board needs no date and
+       no timezone: an alarm is a time of day. */
+    else if (!strcasecmp(key, "tm")) {
+      clockSecs  = (uint32_t)strtoul(val, NULL, 10) % 86400UL;
+      clockAt    = millis();
+      clockKnown = true;
+    }
+    /* "%al=450,GET UP|495,TEA" - the whole list, in minutes since midnight.
+       "%al=" clears it. Sent on connect and whenever you change one. */
+    else if (!strcasecmp(key, "al")) {
+      boardAlarmN = 0;
+      const char *p = val;
+      while (*p && boardAlarmN < ALARM_MAX) {
+        while (*p == '|' || *p == ' ') p++;
+        if (!*p) break;
+        BoardAlarm &a = boardAlarms[boardAlarmN];
+        a.at = (uint16_t)atoi(p);
+        a.text[0] = 0;
+        const char *comma = strchr(p, ',');
+        const char *end   = strchr(p, '|');
+        if (comma && (!end || comma < end)) {
+          size_t n = end ? (size_t)(end - comma - 1) : strlen(comma + 1);
+          if (n > sizeof(a.text) - 1) n = sizeof(a.text) - 1;
+          memcpy(a.text, comma + 1, n);
+          a.text[n] = 0;
+        }
+        boardAlarmN++;
+        if (!end) break;
+        p = end + 1;
+      }
+      Serial.print(F("[alarm] the board holds "));
+      Serial.print(boardAlarmN);
+      Serial.println(F(" of them now"));
     }
     else if (!strcasecmp(key, "gs")) {
       uint8_t n = (uint8_t)atoi(val);
@@ -2897,11 +2961,20 @@ static void drawBell(int x, int y, uint16_t colour) {
 
 // How long until the next alarm, as "6h12" or "12:34", or false if there is
 // none. Counted off the board's own clock between the app's updates.
+static bool alarmOwnLeft(uint32_t *secs);   // below, with the rest of the clock
+
 static bool alarmLeft(char *out, size_t n) {
-  if (!alarmDueAt) return false;
-  int32_t ms = (int32_t)(alarmDueAt - millis());
-  if (ms <= 0) { alarmDueAt = 0; return false; }
-  uint32_t secs = (uint32_t)ms / 1000UL;
+  uint32_t secs;
+  int32_t ms = alarmDueAt ? (int32_t)(alarmDueAt - millis()) : -1;
+  bool fresh = alarmDueAt && ms > 0 && (millis() - alarmNaAt) < 15000UL;
+  if (fresh) {
+    secs = (uint32_t)ms / 1000UL;
+  } else {
+    // The app has gone quiet - it is shut, or the PC is asleep. The board's
+    // own list is what is left, and it is the whole point of having one.
+    if (alarmDueAt && ms <= 0) alarmDueAt = 0;
+    if (!alarmOwnLeft(&secs)) return false;
+  }
   if (secs >= 3600UL)
     snprintf(out, n, "%luh%02lu", (unsigned long)(secs / 3600UL),
              (unsigned long)((secs % 3600UL) / 60UL));
@@ -4206,6 +4279,9 @@ void printHelp() {
   Serial.println(F("    %cv=<slot>,<base64>  a whole frame for MINE 1..8"));
   Serial.println(F("    %gs=n %ms=n   which sub-page of GAME / MUSIC"));
   Serial.println(F("    %fl=<ms>,<text>  flash the screen - the app's alarms"));
+  Serial.println(F("    %tm=<secs>   seconds since local midnight - the"));
+  Serial.println(F("    board's own clock, so alarms ring with the app shut."));
+  Serial.println(F("    %al=450,GET UP|495,TEA   the alarms, in minutes."));
   Serial.println(F("    %ao=1,3      pages that keep the screen lit"));
   Serial.println(F("    %hs=0|1|2|3  how a header arrives: slide, wipe, type,"));
   Serial.println(F("    or not at all."));
@@ -4659,6 +4735,44 @@ static void pageFace(uint8_t *cur, uint8_t *tot) {
   else                      { *cur = 0;        *tot = 1; }
 }
 
+/* Ring, if it is time. Once a minute at most, and only for a minute the board
+   has actually lived through - setting the clock forward does not fire every
+   alarm it skipped over. */
+static void alarmService() {
+  if (!clockKnown || !boardAlarmN) return;
+  int16_t nowMin = (int16_t)(localSecs() / 60UL);
+  if (nowMin == alarmRang) return;
+  for (uint8_t i = 0; i < boardAlarmN; i++) {
+    if ((int16_t)boardAlarms[i].at != nowMin) continue;
+    alarmRang  = nowMin;
+    alarmUntil = millis() + 8000UL;
+    strncpy(alarmText, boardAlarms[i].text, sizeof(alarmText) - 1);
+    alarmText[sizeof(alarmText) - 1] = 0;
+    oledWake();
+    Serial.print(F("[alarm] "));
+    Serial.println(alarmText);
+    return;
+  }
+  alarmRang = nowMin;          // this minute has been considered
+}
+
+/* How long until the next one, from the board's OWN list. Used when the app
+   has not said anything lately - with it running, its number wins, because it
+   knows about the phone's alarms as well as these. */
+static bool alarmOwnLeft(uint32_t *secs) {
+  if (!clockKnown || !boardAlarmN) return false;
+  uint32_t now = localSecs();
+  uint32_t best = 0xFFFFFFFFUL;
+  for (uint8_t i = 0; i < boardAlarmN; i++) {
+    uint32_t at = (uint32_t)boardAlarms[i].at * 60UL;
+    uint32_t left = (at >= now) ? (at - now) : (86400UL - now + at);
+    if (left < best) best = left;
+  }
+  if (best == 0xFFFFFFFFUL) return false;
+  *secs = best;
+  return true;
+}
+
 static void pageAnnounce() {
   static uint8_t  said = 255, saidSub = 255;
   static uint32_t lastSaid = 0;
@@ -4724,6 +4838,7 @@ void loop() {
   // interleaved mid-line: the app never saw a whole "!PAGE n" because it
   // arrived buried inside a status line. Nothing complained; the line simply
   // did not match.
+  alarmService();
   pageAnnounce();
   // Before HID: on an audio page these inputs are the volume's, and hidUpdate()
   // is told to leave them alone.

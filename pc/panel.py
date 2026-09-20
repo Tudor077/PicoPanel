@@ -1211,6 +1211,43 @@ class App(tk.Tk):
         a = self.cfg.get("alarms")
         return a if isinstance(a, list) else []
 
+    def push_alarms(self):
+        """Hand the board the list and the time, so it can ring by itself.
+
+        It has a crystal and nothing else to do with it. Without this the app
+        was the only thing that knew when your alarm was - close it, or let the
+        PC go to sleep, and the panel sat there knowing nothing.
+        """
+        if not self.link.open:
+            return
+        from telemetry import text as T
+        parts = []
+        for a in self._alarms():
+            if not a.get("on", True):
+                continue
+            try:
+                hh, mm = [int(x) for x in str(a.get("at", "")).split(":")[:2]]
+            except ValueError:
+                continue
+            parts.append("%d,%s" % (hh * 60 + mm,
+                                    T.clean(T.translit(a.get("text") or ""), 14)))
+        self.link.send("%al=" + "|".join(parts[:8]), echo=False)
+        self.push_clock()
+
+    def push_clock(self):
+        """Seconds since local midnight. No date and no timezone: an alarm is a
+        time of day, and that is all the board needs to know.
+
+        Re-sent every few minutes. The board counts off its own crystal, which
+        drifts a few seconds a day - nothing for an alarm, but there is no
+        reason to let it accumulate.
+        """
+        if not self.link.open:
+            return
+        now = time.localtime()
+        self.link.send("%%tm=%d" % (now.tm_hour * 3600 + now.tm_min * 60
+                                    + now.tm_sec), echo=False)
+
     def _alarm_refresh(self):
         self.al_box.delete(0, "end")
         for a in self._alarms():
@@ -1232,6 +1269,7 @@ class App(tk.Tk):
         self.cfg["alarms"] = alarms
         settings.save(self.cfg)
         self._alarm_refresh()
+        self.push_alarms()
 
     def _alarm_del(self):
         sel = list(self.al_box.curselection())
@@ -1241,6 +1279,7 @@ class App(tk.Tk):
         self.cfg["alarms"] = alarms
         settings.save(self.cfg)
         self._alarm_refresh()
+        self.push_alarms()
 
     def _toggle_phone(self):
         """Listen for the phone, or stop.
@@ -1304,16 +1343,16 @@ class App(tk.Tk):
             if p and p[0] <= 1.0:
                 self._alarm_fire({"text": p[1] or "PHONE"})
                 self.phone.clear()
-            stamp = time.strftime("%Y-%m-%d %H:%M")
-            now = stamp[-5:]
-            for i, a in enumerate(self._alarms()):
-                if not a.get("on", True) or a.get("at") != now:
-                    continue
-                key = "%d@%s" % (i, a.get("at"))
-                if self._alarm_done.get(key) == stamp:
-                    continue
-                self._alarm_done[key] = stamp
-                self._alarm_fire(a)
+            # The list the board holds is rung by the board - it does that
+            # whether this app is running or not, and two things ringing the
+            # same alarm would flash twice. What is left here is the phone's,
+            # which only this end knows about.
+            #
+            # The clock goes out every few minutes, because the board counts
+            # off its own crystal from the last time it was told.
+            if time.time() - getattr(self, "_clock_at", 0) > 300:
+                self._clock_at = time.time()
+                self.push_clock()
         except Exception as e:
             self._log("alarm check failed: %s" % e, "err")
         self.after(3000, self._alarm_tick)
@@ -1529,6 +1568,7 @@ class App(tk.Tk):
         self.link.send("%%hs=%d" % self.ANIM_CODE.get(
             self.cfg.get("anim_style", "classic"), 0), echo=False)
         self._apply_aod()
+        self.push_alarms()
 
     def _toggle_karaoke(self):
         """Synced lyrics on the KARAOKE page.

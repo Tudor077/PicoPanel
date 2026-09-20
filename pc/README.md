@@ -484,6 +484,28 @@ An alarm is not a footnote to whatever you happened to be looking at.
 
 Set them in **Settings -> Alarms**; **Test** fires one now.
 
+### What the board knows by itself
+
+The app used to be the only thing that knew when your alarm was: it kept the
+clock and the list, and told the board to flash at the moment. Close it, or let
+the PC go to sleep, and nothing happened at all.
+
+The board holds the list now, and a clock - `%al=450,GET UP|495,TEA` in minutes
+since midnight, and `%tm=<seconds since local midnight>`, sent on every connect
+and again every five minutes because the board counts off its own crystal.
+It rings by itself. Verified with the app shut and the port closed: alarm set
+for 22:47, `[alarm] ONBOARD` on the wire at 22:47:01.
+
+It is not a battery-backed clock. Unplug the panel and it forgets the time and
+the list until the app connects again, which it does within a second of
+starting. The same is true of the pages you draw: they stay on screen with the
+app closed, but not across an unplug - see the note above about what happened
+when that was tried.
+
+While the app is running its countdown wins, because it knows about the phone's
+alarms as well as these; when it has been quiet for fifteen seconds the board
+counts down to its own.
+
 ### The phone's alarms
 
 Your alarms are on your phone. That is what actually wakes you, so the panel is
