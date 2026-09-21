@@ -357,10 +357,20 @@ static Marquee marq[6];
 // Above the buffers it sizes. The helper that turns a page number into a
 // slot stays down with the enum, which is what it needs.
 #define CUS_SLOTS 8
+#define CUS_FACES 4
 #define CUS_BYTES 512
-uint8_t  cusBuf[CUS_SLOTS][CUS_BYTES];
-uint16_t cusLen[CUS_SLOTS]  = { 0 };
-uint32_t cusSeen[CUS_SLOTS] = { 0 };
+/* Faces, the same way GAME and MUSIC have them: USER walks them without
+   leaving the page, because they are one subject seen more than one way.
+
+   Four each is what the budget takes. 8 x 4 x 512 is 16 KB of RAM, which this
+   board has to spare, and the same 16 KB in the flash bank - which is what the
+   save costs in frozen screen, so it is not a number to raise for the sake of
+   it. A page has one face until the app says otherwise. */
+uint8_t  cusBuf[CUS_SLOTS][CUS_FACES][CUS_BYTES];
+uint16_t cusLen[CUS_SLOTS][CUS_FACES]  = { { 0 } };
+uint32_t cusSeen[CUS_SLOTS][CUS_FACES] = { { 0 } };
+uint8_t  cusSub[CUS_SLOTS]  = { 0 };        // which face is showing
+uint8_t  cusSubs[CUS_SLOTS] = { 1, 1, 1, 1, 1, 1, 1, 1 };   // how many it has
 #define CUS_STALE_MS 2500UL
 
 #define LYR_BMP_MAX 250
@@ -520,7 +530,9 @@ static bool audFresh() { return audSeen && (millis() - audSeen) < AUD_STALE_MS; 
 // generated prototypes above the FIRST function definition in the file, and
 // from up there `struct SwGroup` does not exist yet.
 static bool cusFresh(int8_t sl) {
-  return sl >= 0 && cusLen[sl] && (millis() - cusSeen[sl]) < CUS_STALE_MS;
+  if (sl < 0) return false;
+  uint8_t f = cusSub[sl];
+  return cusLen[sl][f] && (millis() - cusSeen[sl][f]) < CUS_STALE_MS;
 }
 static bool npFresh()  { return npSeen  && (millis() - npSeen)  < NP_STALE_MS;  }
 static bool audShowing() { return audTouch && (millis() - audTouch) < AUD_SHOW_MS; }
@@ -1949,14 +1961,45 @@ void audParse(char *s) {
     } else if (!strcasecmp(key, "ka")) {
       lyrState = (uint8_t)atoi(val);
     }
-    // "%cv=<base64>" - one whole frame for the custom page.
-    // "%cv=2,<base64>" - slot first, then a whole frame for it.
+    /* "%cv=2,1,<base64>" - slot, face, then a whole frame for it. The face
+       was added when your pages got faces; it is always sent, so there is no
+       "which shape is this" to get wrong. */
     else if (!strcasecmp(key, "cv")) {
+      int slot = atoi(val);
+      const char *c1 = strchr(val, ',');
+      const char *c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+      int face = c1 ? atoi(c1 + 1) : 0;
+      if (c2 && slot >= 0 && slot < CUS_SLOTS && face >= 0 && face < CUS_FACES) {
+        uint16_t got = b64Decode(c2 + 1, cusBuf[slot][face], CUS_BYTES);
+        if (got) {
+          cusLen[slot][face]  = got;
+          cusSeen[slot][face] = millis();
+          stFrames = true;
+        }
+      }
+    }
+    /* "%cn=2,3" - how many faces that page of yours has. The app decides; the
+       board only has to walk them and say where it is. */
+    else if (!strcasecmp(key, "cn")) {
       int slot = atoi(val);
       const char *comma = strchr(val, ',');
       if (comma && slot >= 0 && slot < CUS_SLOTS) {
-        uint16_t got = b64Decode(comma + 1, cusBuf[slot], CUS_BYTES);
-        if (got) { cusLen[slot] = got; cusSeen[slot] = millis(); stFrames = true; }
+        int n = atoi(comma + 1);
+        if (n < 1) n = 1;
+        if (n > CUS_FACES) n = CUS_FACES;
+        cusSubs[slot] = (uint8_t)n;
+        if (cusSub[slot] >= n) cusSub[slot] = 0;
+        stMark();
+      }
+    }
+    /* "%cs=1" - show that face of whichever of your pages is up. The same job
+       %gs does for GAME, and the app's picture walk needs it for the same
+       reason: it has to be able to ask for a face rather than hope. */
+    else if (!strcasecmp(key, "cs")) {
+      int8_t sl = cusSlotOf(page);
+      if (sl >= 0) {
+        int n = atoi(val);
+        if (n >= 0 && n < cusSubs[sl]) cusSub[sl] = (uint8_t)n;
       }
     }
     /* "%pg=1,2,0,3" - the rotation, in order, by page number. Anything left
@@ -2613,6 +2656,16 @@ void usrShortPress() {
     return;
   }
   musicSub = 0;
+  // And yours walk theirs the same way, for the same reason: two faces of one
+  // page are one page, and having to go all the way round the rotation to see
+  // the other half of a thing you laid out is not navigation.
+  {
+    int8_t sl = cusSlotOf(page);
+    if (sl >= 0) {
+      if (cusSub[sl] + 1 < cusSubs[sl]) { cusSub[sl]++; return; }
+      cusSub[sl] = 0;
+    }
+  }
   // Held here on purpose. See hidLockMask: disarming is the way out, and it is
   // the only one, because a second way out is a way to leave by accident -
   // which is the whole thing this is for.
@@ -2834,7 +2887,8 @@ void drawCustom() {
   // the app is running, and going blank two and a half seconds after it
   // closed meant the page existed only while something was watching it. The
   // last thing sent stays until the board is unplugged.
-  if (sl < 0 || !cusLen[sl]) {
+  uint8_t f = (sl >= 0) ? cusSub[sl] : 0;
+  if (sl < 0 || !cusLen[sl][f]) {
     oled->setTextSize(1);
     oled->setCursor(0, gTop + 2);
     oled->print(F("no layout yet"));
@@ -2843,8 +2897,8 @@ void drawCustom() {
     return;
   }
   uint16_t n = (uint16_t)SCREEN_W * oledH / 8;
-  if (n > cusLen[sl]) n = cusLen[sl];
-  memcpy(oled->getBuffer(), cusBuf[sl], n);
+  if (n > cusLen[sl][f]) n = cusLen[sl][f];
+  memcpy(oled->getBuffer(), cusBuf[sl][f], n);
 }
 
 void drawKaraoke() {
@@ -4797,9 +4851,12 @@ static void splash() {
 extern uint8_t _FS_start;
 extern uint8_t _FS_end;
 
-#define ST_MAGIC  0x50505331UL     // "PPS1" - and the 1 is the format
-#define ST_BANK   8192             // one bank: settings, then pictures
+#define ST_MAGIC  0x50505331UL     // "PPS1"
+#define ST_VER    2                // 2 since your pages grew faces
 #define ST_FRAMES 4096             // where the pictures start inside a bank
+// One bank: a sector of settings, then every face of every page of yours.
+#define ST_PICS   (CUS_SLOTS * CUS_FACES * CUS_BYTES)
+#define ST_BANK   (ST_FRAMES + ST_PICS)
 
 // ---- parking ---------------------------------------------------------------
 // Both flags are in SRAM, which is the point: they stay readable while the
@@ -4856,7 +4913,16 @@ struct StoreHead {
   uint16_t spare;
   uint32_t aodMask;
   uint8_t  pageList[P_COUNT];
-  uint16_t cusLen[CUS_SLOTS];
+  /* Which faces have a picture - one bit each, slot * CUS_FACES + face - and
+     how many faces each page has, two bits each.
+
+     Packed rather than kept as the lengths they are in RAM, because 32 faces
+     of uint16 would not fit in the page this block has to stay inside, and a
+     frame is 512 bytes or it is nothing: the app sends whole ones. A short
+     frame read back long draws the zeros after it, which is blank, which is
+     what a half-arrived picture should look like anyway. */
+  uint32_t cusHave;
+  uint16_t cusSubsPacked;
   BoardAlarm alarms[ALARM_MAX];
   // Appended after the format was already in the field, and safe to append to:
   // the block is memset to zero before it is filled and the crc covers all 252
@@ -4904,7 +4970,11 @@ static const uint8_t *stAt(uint8_t bank) {
 static bool stReadBank(uint8_t bank, void *out) {
   StoreBlock *o = (StoreBlock *)out;
   memcpy(o->raw, stAt(bank), sizeof(o->raw));
-  if (o->h.magic != ST_MAGIC || o->h.ver != 1) return false;
+  // A block from before your pages had faces is a different shape and a
+  // different bank size, so it is not read at all - the app pushes everything
+  // back within a second of connecting and the next save is in the new shape.
+  // One boot on the factory rotation is the whole cost of that.
+  if (o->h.magic != ST_MAGIC || o->h.ver != ST_VER) return false;
   return st_crc(o->raw + 4, sizeof(o->raw) - 4) == o->h.crc;
 }
 
@@ -4915,7 +4985,7 @@ static void stFill() {
   memset(stBlk.raw, 0, sizeof(stBlk.raw));
   StoreHead &h = stBlk.h;
   h.magic     = ST_MAGIC;
-  h.ver       = 1;
+  h.ver       = ST_VER;
   h.pageListN = pageListN;
   h.pageSlot  = pageSlot;
   h.rpmStyle  = rpmStyle;
@@ -4924,7 +4994,13 @@ static void stFill() {
   h.aodMask   = aodMask;
   h.hidLock   = hidLockMask;
   memcpy(h.pageList, pageList, sizeof(h.pageList));
-  for (uint8_t i = 0; i < CUS_SLOTS; i++) h.cusLen[i] = cusLen[i];
+  h.cusHave = 0;
+  h.cusSubsPacked = 0;
+  for (uint8_t i = 0; i < CUS_SLOTS; i++) {
+    h.cusSubsPacked |= (uint16_t)((cusSubs[i] - 1) & 3) << (i * 2);
+    for (uint8_t f = 0; f < CUS_FACES; f++)
+      if (cusLen[i][f]) h.cusHave |= 1UL << (i * CUS_FACES + f);
+  }
   memcpy(h.alarms, boardAlarms, sizeof(h.alarms));
 }
 
@@ -4943,7 +5019,7 @@ static bool storeSave(bool force) {
   const uint8_t *was = stAt(stBankNow);
   bool same = stSaved
               && !memcmp(stBlk.raw + 12, was + 12, sizeof(stBlk.raw) - 12)
-              && !memcmp(cusBuf, was + ST_FRAMES, CUS_SLOTS * CUS_BYTES);
+              && !memcmp(cusBuf, was + ST_FRAMES, ST_PICS);
   stDirty  = false;
   stFrames = false;
   if (same && !force) return true;
@@ -4955,7 +5031,7 @@ static bool storeSave(bool force) {
   uint32_t t0 = millis();
   bool ok = flashStore(stBase() + (uint32_t)bank * ST_BANK, ST_BANK,
                        stBlk.raw, sizeof(stBlk.raw),
-                       (const uint8_t *)cusBuf, CUS_SLOTS * CUS_BYTES);
+                       (const uint8_t *)cusBuf, ST_PICS);
   if (!ok) {
     // core1 never parked. Nothing was erased, so there is nothing to undo -
     // and saying so beats a panel that quietly stops remembering.
@@ -5028,18 +5104,23 @@ static void storeLoad() {
   // The pictures. cusSeen stays at zero on purpose: the custom page draws
   // whatever is in the buffer regardless of age, and pretending these had just
   // arrived would only mislead anything that asks how fresh they are.
-  memcpy(cusBuf, stAt(stBankNow) + ST_FRAMES, CUS_SLOTS * CUS_BYTES);
+  memcpy(cusBuf, stAt(stBankNow) + ST_FRAMES, ST_PICS);
   uint8_t pics = 0;
   for (uint8_t i = 0; i < CUS_SLOTS; i++) {
-    cusLen[i] = (h.cusLen[i] <= CUS_BYTES) ? h.cusLen[i] : 0;
-    if (cusLen[i]) pics++;
+    cusSubs[i] = (uint8_t)(((h.cusSubsPacked >> (i * 2)) & 3) + 1);
+    cusSub[i]  = 0;
+    for (uint8_t f = 0; f < CUS_FACES; f++) {
+      bool have = (h.cusHave >> (i * CUS_FACES + f)) & 1;
+      cusLen[i][f] = have ? CUS_BYTES : 0;
+      if (have) pics++;
+    }
   }
 
   Serial.print(F("[store] "));
   Serial.print(pageListN);
   Serial.print(F(" pages, "));
   Serial.print(pics);
-  Serial.print(F(" of your own, "));
+  Serial.print(F(" faces of your own, "));
   Serial.print(boardAlarmN);
   Serial.println(F(" alarms - remembered from last time"));
 }
@@ -5178,8 +5259,10 @@ void setup() {
 // depends on what is sending - a tank has less to show than an airliner - so
 // the app cannot work it out for itself and is told.
 static void pageFace(uint8_t *cur, uint8_t *tot) {
+  int8_t sl = cusSlotOf(page);
   if (page == P_GAME)       { *cur = gameSub;  *tot = gameSubCount(); }
   else if (page == P_MUSIC) { *cur = musicSub; *tot = MUSIC_SUBS; }
+  else if (sl >= 0)         { *cur = cusSub[sl]; *tot = cusSubs[sl]; }
   else                      { *cur = 0;        *tot = 1; }
 }
 

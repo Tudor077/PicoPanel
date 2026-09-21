@@ -146,15 +146,17 @@ class PageList(ttk.Frame):
             self._faces(pg)
 
     def _faces(self, pg):
-        """GAME and MUSIC have faces of their own - USER walks them without
-        leaving the page - so they are shown indented under it.
+        """Faces, indented under the page they belong to - USER walks them
+        without leaving it.
 
-        They are not draggable and they have no buttons: the rotation is by
-        page, and the sub-pages come with the page whether you like it or not.
-        How many there are is the board's to know: GAME's count depends on
-        what is sending.
+        They are not draggable: the rotation is by page, and a face travels
+        with its page whether you like it or not. GAME's and MUSIC's have no
+        buttons either, because how many there are is the board's to know -
+        GAME's count depends on what is sending. Your own pages' faces are
+        yours, so those get a delete and open their own editor.
         """
         n = self.app.subs_of(pg)
+        mine_page = self.app.slot_of(pg) is not None
         mine = self._faces_of.setdefault(pg, [])
         for sub in range(1, n):
             shot = self.shots.get((pg, sub)) or self._blank_shot()
@@ -169,10 +171,24 @@ class PageList(ttk.Frame):
             tk.Label(row, text="%s - %d of %d" % (self.app.page_name(pg),
                                                   sub + 1, n),
                      bg=CARD, fg=DIM, font=("", 9)).pack(side="left", padx=6)
+            if mine_page:
+                tk.Label(row, text="double-click", bg=CARD,
+                         fg=theme.PAL["faint"], font=("", 8)).pack(side="left")
+                b = tk.Button(row, text="✕", width=2, bd=0,
+                              bg=theme.PAL["line"], fg=theme.PAL["warn"],
+                              activebackground="#39404a",
+                              activeforeground=theme.PAL["warn"],
+                              command=lambda p=pg, s=sub:
+                                  self.app.face_del(p, s))
+                b.pack(side="right", padx=4)
+                self._wheel(b)
             mine.append(row)         # they travel with the page when it moves
             for wdg in (row, pic):
                 wdg.bind("<Button-1>",
                          lambda _e, p=pg, s=sub: self.app.pg_show(p, s))
+                if mine_page:
+                    wdg.bind("<Double-Button-1>",
+                             lambda _e, p=pg, s=sub: self.app.pg_open(p, s))
             self._wheel(row)
 
     def _card(self, pg, idx, inside):
@@ -237,6 +253,9 @@ class PageList(ttk.Frame):
         # you want it is the place you were looking at.
         tool("+", lambda p=pg: self.app.pg_new(after=p))
         if self.app.slot_of(pg) is not None:
+            # Another face on this page - walked with USER without leaving it,
+            # the way GAME's are. Distinct from "+", which makes a whole page.
+            tool("↳+", lambda p=pg: self.app.face_add(p), width=3)
             tool("✕", lambda p=pg: self.app.pg_delete(p), fg=theme.PAL["warn"])
 
         for wdg in (card, pic, side):

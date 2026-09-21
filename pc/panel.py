@@ -70,6 +70,10 @@ PAGE_NAMES = ["PANEL", "GAME", "MUSIC",
 # and only the ones you have made appear in the list. Eight is where it stops
 # because each one is a whole frame of the board's RAM.
 CUSTOM_FIRST, CUSTOM_N = 3, 8
+# Faces per page of yours. The board keeps every one of them - 8 x 4 x 512 is
+# 16 KB of its RAM and the same again in the bank it saves to, which is what
+# the save costs in frozen screen. Raising it is not free.
+FACES_MAX = 4
 # The two pages that have faces of their own, by name rather than by number:
 # the numbers move every time the board grows a page, and have.
 P_GAME, P_MUSIC = PAGE_NAMES.index("GAME"), PAGE_NAMES.index("MUSIC")
@@ -399,7 +403,7 @@ class App(tk.Tk):
         self.last_send = 0.0
         self._fb_seq = 0        # frames arrived, so the walk can wait for new ones
         self._typing = {}       # header text that is still arriving
-        self._save_at = {}      # slot -> when to write it to the board's flash
+        self._save_due = None   # when to hand the board what you have changed
         self._hdr_pos = None    # where our header bar is, in pixels
         self._hdr_t = time.time()
         self.hold_until = 0.0   # don't reconnect before this
@@ -902,25 +906,48 @@ class App(tk.Tk):
         self.wake_panel()
         self.keep_page(slot)
 
-    def keep_page(self, slot):
-        """Note that this page has changed.
+    def keep_page(self, slot=None, face=None):
+        """Something you laid out has changed - get it onto the board's flash.
 
-        It used to ask the board to write the picture into its flash, so the
-        page survived a power cut. That wedged the board: the write has to park
-        the core that draws the screen, and parking it never came back. The
-        page now lives in the board's RAM, which keeps it with this app closed
-        but not across an unplug. See the note in the firmware.
+        Three seconds after you stop, not now: the editor saves on every
+        widget you move, and a flash write per nudge would be both silly and
+        slow. What happens then is every face is pushed and the board is told
+        to write - see _keep_service.
+
+        Every face, not the one named, because frames only ever go out for the
+        page that is showing: a face you changed while looking at a different
+        one had otherwise never reached the board at all. The arguments are
+        kept because the callers read better with them.
         """
-        self._save_at[slot] = time.time() + 1.0
+        self._save_due = time.time() + 3.0
 
-    def header_for(self, slot, still=False):
-        """The two strings the header shows: the name, and where the page sits
-        in the rotation - the same counter the board puts on its own pages."""
+    def _keep_service(self):
+        """The other half of keep_page, run from the main loop."""
+        if not self._save_due or time.time() < self._save_due:
+            return
+        self._save_due = None
+        if not self.link.open:
+            return
+        self.push_pictures()        # which ends with %sv
+
+    def header_for(self, slot, still=False, face=0):
+        """The two strings the header shows: the name, and a counter.
+
+        The counter is where the page sits in the rotation - except on a page
+        with faces, where it counts the faces instead. That is what the board
+        does on GAME and MUSIC, and for the same reason: while you are walking
+        the faces of one page, which face you are on is the thing you cannot
+        otherwise tell.
+        """
         if not self.header_of(slot):
             return None
         pg = CUSTOM_FIRST + slot
         order = self._pg_ids[0]
-        where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
+        faces = self.faces_of(slot)
+        if faces > 1:
+            where = "%d/%d" % (min(face, faces - 1) + 1, faces)
+        else:
+            where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
         # The same two words the board puts on its own pages: "HID" while the
         # gamepad is armed, "LOCK" when this page also holds the USER button.
         # Drawn here because your pages' headers are drawn here - the board
@@ -939,10 +966,13 @@ class App(tk.Tk):
             # mark either. Both are states of the moment, and a picture that
             # outlives the moment should not still be claiming them - a panel
             # on a charger saying LOCK with no gamepad anywhere is a lie.
-            plain = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
+            plain = where
+            if not self.faces_of(slot) > 1:
+                plain = ("%d/%d" % (order.index(pg) + 1, len(order))
+                         if pg in order else "")
             return (name, plain, 0, "", 1.0)
         shift, reveal = self._hdr_shift(), 1.0
-        p = self._progress(slot, name, where, bool(badge))
+        p = self._progress((slot, face), name, where, bool(badge))
         style = self.cfg.get("anim_style", "classic")
         if p < 1.0 and style != "none":
             if style == "classic":
@@ -1095,15 +1125,17 @@ class App(tk.Tk):
                        "" if len(self.layout_of(slot)) == 1 else "s"),
                     parent=self):
                 return
-        win = getattr(self, "_edit_wins", {}).pop(slot, None)
-        if win is not None and win.winfo_exists():
-            win.destroy()
+        for f in range(FACES_MAX):
+            win = getattr(self, "_edit_wins", {}).pop((slot, f), None)
+            if win is not None and win.winfo_exists():
+                win.destroy()
         self.cfg["custom_pages"] = [i for i in self.custom_slots() if i != slot]
-        for key in ("layouts", "page_names", "page_headers"):
+        for key in ("layouts", "page_names", "page_headers", "custom_subs"):
             d = dict(self.cfg.get(key) or {})
             d.pop(str(slot), None)
+            for f in range(1, FACES_MAX):       # and every face of it
+                d.pop("%d.%d" % (slot, f), None)
             self.cfg[key] = d
-        self._save_at.pop(slot, None)
         settings.save(self.cfg)
         order, rest = self._pg_ids
         if pg in order:
@@ -1114,25 +1146,118 @@ class App(tk.Tk):
         self.pg_cards.refill()
         self.pg_apply()
 
-    def layout_of(self, slot):
-        return list((self.cfg.get("layouts") or {}).get(str(slot)) or [])
+    # The key a face's layout is filed under. Face 0 keeps the bare slot
+    # number it has always had, so every settings file written before pages
+    # had faces reads back with its layouts exactly where they were.
+    @staticmethod
+    def _lay_key(slot, face=0):
+        return str(slot) if not face else "%d.%d" % (slot, face)
 
-    def set_layout(self, slot, dicts):
+    def layout_of(self, slot, face=0):
+        lay = self.cfg.get("layouts") or {}
+        return list(lay.get(self._lay_key(slot, face)) or [])
+
+    def set_layout(self, slot, dicts, face=0):
         lay = dict(self.cfg.get("layouts") or {})
-        lay[str(slot)] = dicts
+        lay[self._lay_key(slot, face)] = dicts
         self.cfg["layouts"] = lay
         settings.save(self.cfg)
-        self.keep_page(slot)
+        self.keep_page(slot, face)
+
+    # ---- faces of your own pages -----------------------------------------
+    def faces_of(self, slot):
+        """How many faces one of your pages has. One, unless you added some."""
+        v = (self.cfg.get("custom_subs") or {}).get(str(slot))
+        try:
+            return max(1, min(FACES_MAX, int(v)))
+        except (TypeError, ValueError):
+            return 1
+
+    def set_faces(self, slot, n):
+        d = dict(self.cfg.get("custom_subs") or {})
+        d[str(slot)] = max(1, min(FACES_MAX, int(n)))
+        self.cfg["custom_subs"] = d
+        settings.save(self.cfg)
+        self._apply_faces()
+        self.pg_cards.refill()
+
+    def face_add(self, pg):
+        """One more face on this page, and the panel is told at once.
+
+        GAME and MUSIC have had faces from the start - USER walks them without
+        leaving the page, because they are one subject seen more than one way.
+        There was never a reason that should belong to the two pages the board
+        happens to draw itself.
+        """
+        slot = self.slot_of(pg)
+        if slot is None:
+            return
+        n = self.faces_of(slot)
+        if n >= FACES_MAX:
+            self._log("%d faces is as many as a page takes" % FACES_MAX, "err")
+            return
+        self.set_faces(slot, n + 1)
+        self.pg_open(pg, n)          # straight into the one you just made
+
+    def face_del(self, pg, face):
+        """Throw a face away. The ones after it shuffle down, layouts and all -
+        leaving a hole would mean face 2 of 2 being the third one."""
+        slot = self.slot_of(pg)
+        if slot is None or face < 1:
+            return                   # face 0 is the page; deleting it is delete
+        n = self.faces_of(slot)
+        if face >= n:
+            return
+        if self.layout_of(slot, face):
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                    "Delete this face?",
+                    "Face %d of %s has %d widget%s on it. Delete it?"
+                    % (face + 1, self.page_name(pg),
+                       len(self.layout_of(slot, face)),
+                       "" if len(self.layout_of(slot, face)) == 1 else "s"),
+                    parent=self):
+                return
+        win = getattr(self, "_edit_wins", {}).pop((slot, face), None)
+        if win is not None and win.winfo_exists():
+            win.destroy()
+        lay = dict(self.cfg.get("layouts") or {})
+        for i in range(face, n - 1):
+            nxt = lay.get(self._lay_key(slot, i + 1))
+            if nxt is None:
+                lay.pop(self._lay_key(slot, i), None)
+            else:
+                lay[self._lay_key(slot, i)] = nxt
+        lay.pop(self._lay_key(slot, n - 1), None)
+        self.cfg["layouts"] = lay
+        settings.save(self.cfg)
+        self.set_faces(slot, n - 1)
+
+    def _apply_faces(self):
+        """Tell the board how many faces each of your pages has."""
+        for slot in self.custom_slots():
+            self.link.send("%%cn=%d,%d" % (slot, self.faces_of(slot)),
+                           echo=False)
 
     def subs_of(self, pg):
-        """How many faces that page has, as the board last said. One until it
-        has been there - the count is the board's to know, not ours."""
+        """How many faces that page has.
+
+        For your own pages it is the app's answer: you decided, and the board
+        is told. For GAME and MUSIC it is the board's - GAME's count depends on
+        what is sending, and a tank has less to show than an airliner.
+        """
+        slot = self.slot_of(pg)
+        if slot is not None:
+            return self.faces_of(slot)
         return self.link.subs_seen.get(pg, 1)
 
     def pg_show(self, pg, sub=0):
         """Put that page on the panel, so the card you clicked is the thing you
         are looking at."""
         self.link.send("%%gp=%d" % pg, echo=False)
+        if self.slot_of(pg) is not None:
+            self.link.send("%%cs=%d" % sub, echo=False)
+            return
         key = "gs" if pg == P_GAME else ("ms" if pg == P_MUSIC else None)
         if key:
             # Always, including face 0. The board keeps whichever face it was
@@ -1141,20 +1266,29 @@ class App(tk.Tk):
             # it had never actually asked for.
             self.link.send("%%%s=%d" % (key, sub), echo=False)
 
-    def pg_open(self, pg):
+    def pg_open(self, pg, face=0):
         """Double-click: lay this page out. Only your own pages have a layout -
-        the rest are drawn by the board and there is nothing here to edit."""
+        the rest are drawn by the board and there is nothing here to edit.
+
+        One window per face: they are separate layouts and you will want to see
+        one while building the other.
+        """
         slot = self.slot_of(pg)
         if slot is None:
             return
-        win = getattr(self, "_edit_wins", {}).get(slot)
+        face = max(0, min(face, self.faces_of(slot) - 1))
+        if not hasattr(self, "_edit_wins"):
+            self._edit_wins = {}
+        win = self._edit_wins.get((slot, face))
         if win is not None and win.winfo_exists():
             win.lift()
             return
-        if not hasattr(self, "_edit_wins"):
-            self._edit_wins = {}
-        self._edit_wins[slot] = editor.EditorWindow(self, slot, self.page_name(pg))
-        self.pg_show(pg)          # and show it, so you can see what you draw
+        title = self.page_name(pg)
+        if self.faces_of(slot) > 1:
+            title = "%s - %d of %d" % (title, face + 1, self.faces_of(slot))
+        self._edit_wins[(slot, face)] = editor.EditorWindow(self, slot, title,
+                                                            face=face)
+        self.pg_show(pg, face)    # and show it, so you can see what you draw
 
     def pg_toggle(self, pg):
         order, rest = self._pg_ids
@@ -1651,17 +1785,21 @@ class App(tk.Tk):
             return 0
         sent = 0
         for slot in self.custom_slots():
-            try:
-                items = [WG.Widget.from_dict(d) for d in self.layout_of(slot)]
-                img = WG.render(items, self.widget_data(),
-                                header=self.header_for(slot, still=True))
-                if img is None:
-                    continue
-                b = base64.b64encode(WG.to_frame(img)).decode()
-                self.link.send("%%cv=%d,%s" % (slot, b), echo=False)
-                sent += 1
-            except Exception as e:
-                self._log("page %d not sent: %s" % (slot + 1, e), "err")
+            for face in range(self.faces_of(slot)):
+                try:
+                    items = [WG.Widget.from_dict(d)
+                             for d in self.layout_of(slot, face)]
+                    img = WG.render(items, self.widget_data(),
+                                    header=self.header_for(slot, still=True,
+                                                           face=face))
+                    if img is None:
+                        continue
+                    b = base64.b64encode(WG.to_frame(img)).decode()
+                    self.link.send("%%cv=%d,%d,%s" % (slot, face, b), echo=False)
+                    sent += 1
+                except Exception as e:
+                    self._log("page %d face %d not sent: %s"
+                              % (slot + 1, face + 1, e), "err")
         if sent:
             self.link.send("%sv", echo=False)
         return sent
@@ -1683,6 +1821,7 @@ class App(tk.Tk):
             self.cfg.get("anim_style", "classic"), 0), echo=False)
         self._apply_aod()
         self._apply_hid()
+        self._apply_faces()
         self.push_alarms()
         # After the page list, so the board knows which pages the pictures are
         # for; a moment later, so the connect itself is not held up by six
@@ -1807,11 +1946,15 @@ class App(tk.Tk):
             return True
         slot = self.slot_of(pg)
         if slot is not None:
-            for d in self.layout_of(slot):
-                if str(d.get("field", "")).startswith("np_"):
-                    return True
-                if d.get("kind") == "disc":
-                    return True
+            # Every face of it, not the one showing: USER walks to the next one
+            # without warning, and a track widget that has to wake the media
+            # session up first would show the previous song for a second.
+            for face in range(self.faces_of(slot)):
+                for d in self.layout_of(slot, face):
+                    if str(d.get("field", "")).startswith("np_"):
+                        return True
+                    if d.get("kind") == "disc":
+                        return True
         return False
 
     def widget_data(self):
@@ -1976,6 +2119,7 @@ class App(tk.Tk):
 
     # -------------------------------------------------- loop
     def _pump(self):
+        self._keep_service()
         # Frames are coalesced: at 20 a second several can pile up between two
         # turns of this loop, and drawing the ones already superseded would cost
         # 4 ms each to produce a picture nobody ever sees.
@@ -2068,6 +2212,7 @@ class App(tk.Tk):
             # editor window: the page has to work with every window closed.
             now = time.time()
             slot = self.slot_of(self.link.board_page) if self.link.open else None
+            face = self.link.board_sub if slot is not None else 0
             # Decided NOW, not when the last frame went out: the header starts
             # moving between frames, and a rate chosen 66 ms ago would hold the
             # next one back until the animation was half over. Fast while it
@@ -2077,13 +2222,14 @@ class App(tk.Tk):
             if slot is not None and now - next_page >= period_now:
                 next_page = now
                 try:
-                    items = [WG.Widget.from_dict(d) for d in self.layout_of(slot)]
+                    items = [WG.Widget.from_dict(d)
+                             for d in self.layout_of(slot, face)]
                     img = WG.render(items, self.widget_data(),
-                                    header=self.header_for(slot))
+                                    header=self.header_for(slot, face=face))
                     if img is not None:
                         b = base64.b64encode(WG.to_frame(img)).decode()
-                        self.link.send("%%cv=%d,%s" % (slot, b), echo=False)
-                    self._save_at.pop(slot, None)
+                        self.link.send("%%cv=%d,%d,%s" % (slot, face, b),
+                                       echo=False)
                 except Exception as e:
                     # Once. A page that quietly stops being sent looks exactly
                     # like a page nobody has drawn yet, and the board says so

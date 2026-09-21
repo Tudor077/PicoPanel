@@ -65,11 +65,14 @@ def icon(kind, defaults, zoom=2):
 class Editor(ttk.Frame):
     """One custom page. `slot` says which of the board's four it is."""
 
-    def __init__(self, master, app, slot=0):
+    def __init__(self, master, app, slot=0, face=0):
         super().__init__(master)
         self.app = app
         self.slot = slot
-        self.items = [WG.Widget.from_dict(d) for d in app.layout_of(slot)]
+        # Which face of that page. The name and the header bar belong to the
+        # page and are shared; only the widgets are this face's.
+        self.face = face
+        self.items = [WG.Widget.from_dict(d) for d in app.layout_of(slot, face)]
         self.sel = None
         self._drag = None
         self._dnd = None            # (kind, defaults) while dragging off the shelf
@@ -266,7 +269,7 @@ class Editor(ttk.Frame):
         self.app.set_header(self.slot, self.hdr_var.get())
 
     def _head(self):
-        return self.app.header_for(self.slot)
+        return self.app.header_for(self.slot, face=self.face)
 
     # ------------------------------------------------ off the shelf and on
     def _pick(self, kind, defaults, ev):
@@ -497,7 +500,8 @@ class Editor(ttk.Frame):
         self._save()
 
     def _save(self):
-        self.app.set_layout(self.slot, [w.to_dict() for w in self.items])
+        self.app.set_layout(self.slot, [w.to_dict() for w in self.items],
+                            face=self.face)
 
     # ------------------------------------------------------------ painting
     def _tick(self):
@@ -579,11 +583,11 @@ class Editor(ttk.Frame):
 class EditorWindow(tk.Toplevel):
     """The editor on its own, opened by double-clicking a page."""
 
-    def __init__(self, app, slot, title):
+    def __init__(self, app, slot, title, face=0):
         super().__init__(app)
         self.title("PicoPanel - %s" % title)
         self.transient(app)
-        self.editor = Editor(self, app, slot)
+        self.editor = Editor(self, app, slot, face)
         self.editor.pack(fill="both", expand=True)
         try:
             self.iconbitmap(app.icon_path)

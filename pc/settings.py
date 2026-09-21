@@ -52,9 +52,18 @@ DEFAULTS = {
     "rpm_style": 0,         # 0 a bar, 1 a needle
     "i2c_khz": 400,
 
-    # The widgets you laid out, one list per slot: {"0": [...], "1": [...]}.
+    # The widgets you laid out, one list per face: {"0": [...], "0.1": [...]}.
+    # Face 0 is filed under the bare slot number, which is the key it had
+    # before pages had faces - so a settings file written back then reads with
+    # every layout exactly where it was.
     # The board never sees these - it only ever gets the finished picture.
     "layouts": {},
+
+    # How many faces each of your pages has: {"0": 3}. Missing means one.
+    # USER walks them without leaving the page, the way it walks GAME's - two
+    # faces of one page are one page, and having to go all the way round the
+    # rotation to see the other half of a thing you laid out is not navigation.
+    "custom_subs": {},
 
     # What you have called your own pages, by slot: {"0": "TURBO"}. The board
     # calls them MINE 1..8 and always will - the name is drawn into the picture

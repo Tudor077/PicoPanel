@@ -45,8 +45,14 @@ so they are handed the same colours by name. That is why there is a palette dict
 rather than colours scattered through five files.
 
 **Export settings** and **Import** are next to the options: the whole file -
-pages, order, layouts, names, alarms - somewhere you can find it. Import asks
-first and then restarts the app, because half of it is read at startup.
+pages, order, layouts and their faces, names, which pages stay lit, which hold
+the gamepad, alarms - somewhere you can find it. Import asks first and then
+restarts the app, because half of it is read at startup.
+
+Checked rather than claimed: the export is driven with the file chooser
+answered for it and the result read back, and all twenty keys come out
+unchanged. Keep one before a reinstall and the panel comes back exactly as it
+was.
 
 ## What you see
 
@@ -465,6 +471,28 @@ board:
 1 MHz is past what the SSD1306 promises, which is why it is a setting and not
 the default: if yours dislikes it the screen fills with rubbish and you come
 back here and set it down.
+
+### Faces of your own
+
+GAME and MUSIC have had faces from the start: USER walks them without leaving
+the page, because they are one subject seen more than one way. There was never
+a reason that should belong to the two pages the board happens to draw itself.
+
+The **↳+** chip on a card adds a face, up to four. Each is its own layout in its
+own editor window, and they are walked with USER exactly like GAME's - press
+past the last one and you leave the page. The header counts faces instead of
+the rotation while a page has more than one, which is what the board does on its
+own two and for the same reason: while you are walking the faces of one page,
+which face you are on is the thing you cannot otherwise tell. The **✕** on a
+face row throws it away, and the ones after it shuffle down - leaving a hole
+would mean "face 2 of 2" being the third one.
+
+Four is where it stops. Every face is a whole 512-byte frame the board holds:
+8 x 4 is 16 KB of its RAM and the same again in the bank it saves to, and that
+bank is what the save costs in frozen screen - 102 ms, measured, up from 45.
+
+Face 0 is filed under the bare slot number it has always had, so a settings file
+written before any of this reads back with every layout exactly where it was.
 
 ### Pages that hold the gamepad
 
