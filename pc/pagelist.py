@@ -211,8 +211,9 @@ class PageList(ttk.Frame):
             tk.Label(side, text="no picture yet", bg=CARD,
                      fg=theme.PAL["faint"], font=("", 8)).pack(anchor="w")
 
-        def tool(text, cmd, fg="#e6e8ec"):
-            b = tk.Button(btn, text=text, width=2, bd=0, bg=theme.PAL["line"], fg=fg,
+        def tool(text, cmd, fg="#e6e8ec", width=2):
+            b = tk.Button(btn, text=text, width=width, bd=0,
+                          bg=theme.PAL["line"], fg=fg,
                           activebackground="#39404a", activeforeground=fg,
                           command=cmd)
             b.pack(side="right", padx=2)
@@ -224,6 +225,12 @@ class PageList(ttk.Frame):
         tool("☀" if lit else "◌",
              lambda p=pg: self.app.aod_toggle(p),
              fg="#e8c45f" if lit else "#6b7280")
+        # Holds the USER button while the gamepad is armed: the page will not
+        # step past it and you disarm to leave. The GAME page has always done
+        # this - the chip says which others do.
+        held = self.app.hid_of(pg)
+        tool("HID", lambda p=pg: self.app.hid_toggle(p), width=3,
+             fg="#7fc7ff" if held else "#6b7280")
         # Out of the rotation, or back into it.
         tool("↓" if inside else "↑", lambda p=pg: self.app.pg_toggle(p))
         # A page of your own, made right here rather than at the end: the place

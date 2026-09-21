@@ -466,6 +466,45 @@ board:
 the default: if yours dislikes it the screen fills with rubbish and you come
 back here and set it down.
 
+### Pages that hold the gamepad
+
+The GAME page has always done this: with HID armed, the USER button walks the
+game's own sub-pages and will not leave, and to get out you disarm. Those are
+the pages you look at while driving, and a press mid-corner should not cost you
+the one you were reading.
+
+It is now a property of any page rather than of one. The **HID** chip on a
+card holds that page the same way; the panel says `LOCK` where it normally says
+`HID`, so you can see which state you are in without remembering. Your own
+pages say it too - their header is drawn by the app, so the app puts the same
+two words on it.
+
+Disarming is the way out and deliberately the only one. A second way out is a
+way to leave by accident, which is the thing being prevented.
+
+The list is kept on the board with the rest, so a panel on a charger still
+holds the pages you said to hold - see below. `%hl=1,3` sets it, `HL=` in the
+status line says what it is, and `%up` presses USER from the PC, which is how
+any of this was checked at all: the menu is the one part of the board you
+cannot otherwise reach over the wire.
+
+### The double press that put back a page it never moved
+
+Two quick presses on USER toggle the media layer. The first of them has already
+done something by the time the second arrives, so the second undoes it - and it
+undid the wrong thing. It always called `pageStep(-1)`, assuming the first press
+had stepped a page.
+
+Often it had not. In game with HID armed the first press walks the GAME page's
+sub-pages; on MUSIC it walks the words; on a page that holds HID it does nothing
+at all. In every one of those the undo took a page off as well, so two quick
+presses on a sub-page left you a page *back* from where you started instead of
+on the same sub-page with the layer flipped.
+
+It now puts back what was actually there - page, slot and both sub-page numbers,
+noted before the first press does anything - rather than guessing what moved.
+That covers all four branches and the next one too.
+
 ## What it costs while you are not looking
 
 Measured on this machine, the app sitting in the tray with the board connected:
@@ -501,8 +540,9 @@ Set them in **Settings -> Alarms**; **Test** fires one now.
 
 ### What the panel remembers by itself
 
-The rotation and the order, which pages stay lit, the two switches that change
-how things look, the alarms, and a picture for each of your own pages. All of it
+The rotation and the order, which pages stay lit, which hold the gamepad, the
+two switches that change how things look, the alarms, and a picture for each of
+your own pages. All of it
 in the 64 KB the board reserves for a filesystem it does not have - two banks of
 two sectors written alternately, so a power cut in the middle of a write costs
 you that write and not the lot, and the newer of the two wins on the way back

@@ -92,6 +92,12 @@ DEFAULTS = {
     # is right for a panel you glance at and wrong for one you are watching.
     "aod_pages": [],
 
+    # Pages that hold the USER button while the gamepad is armed, by number.
+    # The GAME page has always done it; this is that made yours. Disarming is
+    # the way out and the only one - a second way out is a way to leave by
+    # accident, which is the thing being prevented.
+    "hid_pages": [],
+
     # Named page arrangements: {"Driving": [1, 3, 0], ...}. Yours, not the
     # board's - it only ever hears the one list that is currently in force.
     "page_presets": {},

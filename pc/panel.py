@@ -719,6 +719,23 @@ class App(tk.Tk):
                             value=khz, command=self._apply_i2c).pack(side="left",
                                                                      padx=(0, 10))
 
+        # ---- pages that hold the gamepad
+        hl = ttk.LabelFrame(rest, text="Pages that hold HID")
+        hl.pack(fill="x", pady=(10, 0))
+        ttk.Label(hl, wraplength=320, justify="left", style="Hint.TLabel",
+                  text="The GAME page has always done this: with the gamepad "
+                       "armed, the USER button walks the game's own sub-pages "
+                       "and will not leave, and you disarm to get out. Mark any "
+                       "page the same way with its HID chip in the list - a "
+                       "press mid-corner should not cost you the page you were "
+                       "reading. Disarming is the only way out, on purpose: a "
+                       "second way out is a way to leave by accident."
+                  ).pack(anchor="w", padx=8, pady=(4, 2))
+        self.hid_lock_lbl = ttk.Label(hl, wraplength=320, justify="left",
+                                      style="Hint.TLabel")
+        self.hid_lock_lbl.pack(anchor="w", padx=8, pady=(0, 6))
+        self._hid_lock_say()
+
         # ---- the rest
         opt = ttk.LabelFrame(rest, text="Options")
         opt.pack(fill="x", pady=(10, 0))
@@ -904,6 +921,13 @@ class App(tk.Tk):
         pg = CUSTOM_FIRST + slot
         order = self._pg_ids[0]
         where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
+        # The same two words the board puts on its own pages: "HID" while the
+        # gamepad is armed, "LOCK" when this page also holds the USER button.
+        # Drawn here because your pages' headers are drawn here - the board
+        # only ever gets the finished picture, so a mark it adds to its own
+        # header never reached yours.
+        if self.hid_armed:
+            where = ("LOCK " if self.hid_of(pg) else "HID ") + where
         name = self.page_name(pg)
         badge = self.alarm_badge()
         # The third number is where the board's own header has slid to, so
@@ -911,9 +935,12 @@ class App(tk.Tk):
         # fourth is the countdown, which does NOT go away with it: the board
         # keeps showing it on its own pages too.
         if still:
-            # The picture that gets kept: header down, no countdown. A frozen
-            # "3 hours to go" would still be saying it next week.
-            return (name, where, 0, "", 1.0)
+            # The picture that gets kept: header down, no countdown, and no HID
+            # mark either. Both are states of the moment, and a picture that
+            # outlives the moment should not still be claiming them - a panel
+            # on a charger saying LOCK with no gamepad anywhere is a lie.
+            plain = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
+            return (name, plain, 0, "", 1.0)
         shift, reveal = self._hdr_shift(), 1.0
         p = self._progress(slot, name, where, bool(badge))
         style = self.cfg.get("anim_style", "classic")
@@ -1546,6 +1573,54 @@ class App(tk.Tk):
         self._apply_aod()
         self.pg_cards.refill()
 
+    # Whether the gamepad is armed, as of the last report from the board. Not
+    # something the app decides - it is the board's state and the button on the
+    # panel changes it too - so it is read, never set.
+    hid_armed = False
+
+    def hid_pages(self):
+        v = self.cfg.get("hid_pages")
+        return [int(i) for i in v if isinstance(i, int)] if isinstance(v, list) else []
+
+    def hid_of(self, pg):
+        return pg in self.hid_pages()
+
+    def hid_toggle(self, pg):
+        """Hold this page while the gamepad is armed, or let the button past it.
+
+        The GAME page has always done this: armed, the USER button walks the
+        game's own sub-pages and will not leave, and you disarm to get out. It
+        is right for anything you use mid-race - a press in the middle of a
+        corner should not cost you the page you were reading.
+
+        Disarming is the only way out, deliberately. A second way out is a way
+        to leave by accident, which is the thing being prevented.
+        """
+        on = self.hid_pages()
+        if pg in on:
+            on.remove(pg)
+        else:
+            on.append(pg)
+        self.cfg["hid_pages"] = sorted(on)
+        settings.save(self.cfg)
+        self._apply_hid()
+        self._hid_lock_say()
+        self.pg_cards.refill()
+
+    def _hid_lock_say(self):
+        """Which pages hold it, in one line. The chips say it per card; this is
+        the whole set without scanning twelve of them."""
+        lbl = getattr(self, "hid_lock_lbl", None)
+        if lbl is None:
+            return
+        held = [self.page_name(p) for p in self.hid_pages()]
+        lbl.configure(text="Holding: " + (", ".join(held) if held
+                                          else "nothing - every page steps on"))
+
+    def _apply_hid(self):
+        self.link.send("%hl=" + ",".join(str(i) for i in self.hid_pages()),
+                       echo=False)
+
     def _apply_aod(self):
         self.link.send("%ao=" + ",".join(str(i) for i in self.aod_pages()),
                        echo=False)
@@ -1607,6 +1682,7 @@ class App(tk.Tk):
         self.link.send("%%hs=%d" % self.ANIM_CODE.get(
             self.cfg.get("anim_style", "classic"), 0), echo=False)
         self._apply_aod()
+        self._apply_hid()
         self.push_alarms()
         # After the page list, so the board knows which pages the pictures are
         # for; a moment later, so the connect itself is not held up by six
@@ -2144,6 +2220,7 @@ class App(tk.Tk):
             text=f"OLED: {'ok' if t['oled'] else 'missing'}{fps}{lit}")
         self.err_lbl.configure(text=f"Enc errors: {t['err']}")
         hid = t["hid"]
+        self.hid_armed = (hid == "1")
         if hid == "1":
             self.hid_lbl.configure(text="HID: ARMED",
                                    foreground=theme.PAL["accent"])

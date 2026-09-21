@@ -648,6 +648,16 @@ uint8_t  rpmStyle = 0;
    yours, for a page you want to be able to glance at from across the room. */
 uint32_t aodMask = 0;
 
+/* Pages that hold on to you while HID is armed - one bit each, set from the
+   app. The USER button stops stepping past them, so a press in the middle of a
+   corner leaves you where you were instead of three pages away.
+
+   The way out is deliberately the HID button and nothing else. It is not a trap:
+   if the gamepad is armed you are playing, and if you are playing you are not
+   paging. Disarm and the panel walks again - which is exactly how the GAME page
+   has always behaved, this being that made general. */
+uint32_t hidLockMask = 0;
+
 /* How a header arrives: 0 down from the top (the panel's own way), 1 wiped in
    from the left like the splash, 2 a letter at a time, 3 just there. The app
    sets it, and it applies to every page - a global setting that only reached
@@ -1894,7 +1904,14 @@ void audParse(char *s) {
       // nothing because there is nothing to carry. Rather than letting every
       // handler cope with an empty value, the one that needs none is answered
       // here.
+      // Three of them carry nothing, because there is nothing to carry: "%wk"
+      // wakes the screen, "%up" is a short press on USER, "%sv" writes the
+      // settings down. Answered here rather than making every handler cope
+      // with an empty value - and a token with no "=" reaches no handler at
+      // all, which is how %sv sat there doing nothing until it was tested.
       if (!strcasecmp(tok, "wk")) oledWake();
+      else if (!strcasecmp(tok, "up")) { oledWake(); usrShortPress(); }
+      else if (!strcasecmp(tok, "sv")) storeSave(false);
       continue;
     }
     *eq = 0;
@@ -2030,6 +2047,31 @@ void audParse(char *s) {
       aodMask = m;
       stMark();
     }
+    /* "%up" - a short press on USER, from here. "%up=2" for a double, which
+       is the layer toggle. The same function a real press runs, so what you
+       see is what the button does and not an imitation of it. */
+    else if (!strcasecmp(key, "up")) {
+      int n = atoi(val);
+      if (n < 1) n = 1;
+      if (n > 2) n = 2;
+      oledWake();
+      for (int i = 0; i < n; i++) usrShortPress();
+    }
+    /* "%hl=1,3" - the pages that hold on to you while HID is armed. Same shape
+       as %ao, and "%hl=" lets go of all of them. */
+    else if (!strcasecmp(key, "hl")) {
+      uint32_t m = 0;
+      const char *p = val;
+      while (*p) {
+        while (*p == ',' || *p == ' ') p++;
+        if (!*p) break;
+        int n = atoi(p);
+        if (n >= 0 && n < 32) m |= (1UL << n);
+        while (*p && *p != ',') p++;
+      }
+      hidLockMask = m;
+      stMark();
+    }
     /* "%hs=0..3" - how a header arrives. See hdrStyle. */
     else if (!strcasecmp(key, "hs")) {
       uint8_t st = (uint8_t)atoi(val);
@@ -2073,7 +2115,10 @@ void audParse(char *s) {
     }
     /* "%sv" - write it all down now. Sent by the app when it has just changed
        something and when it is shutting down; the board also does it by itself
-       when the app goes quiet, for the times the app never got to ask. */
+       when the app goes quiet, for the times the app never got to ask.
+
+       The bare form is handled above, with the other tokens that carry no
+       value. This one catches "%sv=1" for anyone who writes it that way. */
     else if (!strcasecmp(key, "sv")) {
       storeSave(false);
     }
@@ -2491,12 +2536,41 @@ void usrUpdate() {
   if (usrStage1) return;
   if (usrWokeOled) return;            // the press only woke the screen
 
+  usrShortPress();
+}
+
+/* Everything a short press on USER does, with none of the debouncing.
+
+   Split out so the PC can ask for one - "%up", or "%up=2" for a double. This
+   is the panel's only navigation button and the menu is the one thing on the
+   board you cannot check over the wire; a fix to it could only ever be tried
+   by standing next to it. */
+void usrShortPress() {
+  uint32_t now = millis();
   static uint32_t lastShort = 0;
   uint32_t gap = lastShort ? (now - lastShort) : 0;
 
+  /* Where the panel was before the last single press.
+
+     A double press is one press and then another, so by the time the second
+     one arrives the first has already moved something, and the toggle has to
+     put it back. It used to put it back with pageStep(-1), which assumed the
+     first press had stepped a page.
+
+     Often it had not. In game with HID armed the first press walks the GAME
+     page's own sub-pages; on MUSIC it walks the words; on a page that holds
+     HID it does nothing at all. In every one of those the undo took a page off
+     as well, so two quick presses on a sub-page left you a page BACK from
+     where you started rather than on the same sub-page with the layer flipped.
+
+     Restoring what was there covers all four branches, and the next one too. */
+  static uint8_t wasPage = 0, wasSlot = 0, wasGameSub = 0, wasMusicSub = 0;
+
   if (lastShort && gap < usrDoubleMs) {
-    // Second press: step the page back (the first one moved it on) and toggle.
-    pageStep(-1);
+    page      = wasPage;
+    pageSlot  = wasSlot;
+    gameSub   = wasGameSub;
+    musicSub  = wasMusicSub;
     lastShort = 0;
     mediaLayer = !mediaLayer;
     Serial.printf("[usr] double press at %lu ms -> layer = %s\n",
@@ -2508,6 +2582,12 @@ void usrUpdate() {
     Serial.printf("[usr] single press, %lu ms after the previous one (window %u)\n",
                   (unsigned long)gap, usrDoubleMs);
   lastShort = now;
+  // Noted BEFORE this press does anything, because it is what the next one
+  // will put back if it comes quickly enough to be half of a double.
+  wasPage     = page;
+  wasSlot     = pageSlot;
+  wasGameSub  = gameSub;
+  wasMusicSub = musicSub;
 
 #if HID_AVAILABLE
   // In game, with HID armed, the button flips through the game's sub-pages
@@ -2533,6 +2613,13 @@ void usrUpdate() {
     return;
   }
   musicSub = 0;
+  // Held here on purpose. See hidLockMask: disarming is the way out, and it is
+  // the only one, because a second way out is a way to leave by accident -
+  // which is the whole thing this is for.
+  if (hidArmed && (hidLockMask & (1UL << page))) {
+    Serial.println(F("[usr] this page holds HID - disarm to move on"));
+    return;
+  }
   pageStep(1);
 }
 
@@ -3016,9 +3103,13 @@ void header(int shift) {
   int nameX = 2, nameRoom = SCREEN_W;
   // The latched layer shows in the header on every page: if it stays on and you
   // can't see it, you press a button and wonder why it skipped a track.
+  // "HID" while the gamepad is armed; "LOCK" when this page is also one that
+  // holds on to you. One word rather than two marks: the counter has about six
+  // characters to spare, and "you cannot leave" is worth more of them than
+  // repeating something the word already implies - only an armed panel locks.
   const char *hidMark = "";
 #if HID_AVAILABLE
-  if (hidArmed) hidMark = "HID ";
+  if (hidArmed) hidMark = (hidLockMask & (1UL << page)) ? "LOCK " : "HID ";
 #endif
   // On the GAME page we count the game's sub-pages, not the panel's: you can't
   // navigate the panel from there anyway, and two counters side by side used to
@@ -4304,6 +4395,10 @@ void printHelp() {
   Serial.println(F("    %sv          write the rotation, the pictures and"));
   Serial.println(F("    the alarms to flash, so they are there without the app."));
   Serial.println(F("    %ao=1,3      pages that keep the screen lit"));
+  Serial.println(F("    %up          a short press on USER, from here"));
+  Serial.println(F("    (%up=2 for a double - the layer toggle)"));
+  Serial.println(F("    %hl=1,3      pages the USER button will not leave"));
+  Serial.println(F("    while HID is armed - disarm to move on."));
   Serial.println(F("    %hs=0|1|2|3  how a header arrives: slide, wipe, type,"));
   Serial.println(F("    or not at all."));
   Serial.println(F("    %wk          wake the panel - the app, when you do"));
@@ -4540,6 +4635,21 @@ void serialReport() {
     if (i) Serial.print(',');
     Serial.print(pageList[i]);
   }
+  // Which pages hold the USER button while HID is armed. Next to ORD because
+  // it is the same kind of thing - what the rotation does, rather than what is
+  // wired to what - and because a page that will not step on is the first
+  // thing to ask about when the button "does nothing".
+  Serial.print(F(" HL="));
+  {
+    bool any = false;
+    for (uint8_t i = 0; i < P_COUNT; i++) {
+      if (!(hidLockMask & (1UL << i))) continue;
+      if (any) Serial.print(',');
+      Serial.print(i);
+      any = true;
+    }
+    if (!any) Serial.print('-');
+  }
   Serial.print(F(" M=")); Serial.print(mediaLayer ? '1' : '0');
   Serial.print(F(" KNOB="));
   if (audioPage())      Serial.print(F("vol"));
@@ -4748,6 +4858,11 @@ struct StoreHead {
   uint8_t  pageList[P_COUNT];
   uint16_t cusLen[CUS_SLOTS];
   BoardAlarm alarms[ALARM_MAX];
+  // Appended after the format was already in the field, and safe to append to:
+  // the block is memset to zero before it is filled and the crc covers all 252
+  // bytes, so a block written before this existed still verifies and reads back
+  // as "no page holds you" - which is what it meant.
+  uint32_t hidLock;
 };
 union StoreBlock { StoreHead h; uint8_t raw[256]; };
 static_assert(sizeof(StoreHead) <= 256, "the settings no longer fit one page");
@@ -4807,6 +4922,7 @@ static void stFill() {
   h.hdrStyle  = hdrStyle;
   h.alarmN    = boardAlarmN;
   h.aodMask   = aodMask;
+  h.hidLock   = hidLockMask;
   memcpy(h.pageList, pageList, sizeof(h.pageList));
   for (uint8_t i = 0; i < CUS_SLOTS; i++) h.cusLen[i] = cusLen[i];
   memcpy(h.alarms, boardAlarms, sizeof(h.alarms));
@@ -4902,6 +5018,7 @@ static void storeLoad() {
   rpmStyle = (h.rpmStyle == 1) ? 1 : 0;
   hdrStyle = (h.hdrStyle <= 3) ? h.hdrStyle : 0;
   aodMask  = h.aodMask;
+  hidLockMask = h.hidLock;
 
   boardAlarmN = (h.alarmN <= ALARM_MAX) ? h.alarmN : 0;
   memcpy(boardAlarms, h.alarms, sizeof(boardAlarms));
