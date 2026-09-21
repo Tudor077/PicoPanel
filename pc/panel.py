@@ -1556,9 +1556,48 @@ class App(tk.Tk):
         settings.save(self.cfg)
         self.link.send("%%ic=%d" % v, echo=False)
 
+    def push_pictures(self):
+        """A picture for every one of your pages, not only the one showing.
+
+        The rest of the time a frame goes out for the page that is up and no
+        other - streaming eight of them at pages nobody is looking at would be
+        silly. But the board keeps these now, and it cannot keep one it was
+        never sent: a page you drew and never walked to came back from a cold
+        boot saying "no layout yet" about a layout that exists.
+
+        So, twice: once on connect and once on the way out. Eight frames is
+        under six kilobytes, and the board is told to write them down after.
+
+        The header is the still one - down, and with no countdown on it. A
+        picture that gets kept should not be frozen mid-animation, and a frozen
+        "3 h to go" would still be saying it next week.
+        """
+        if not self.link.open:
+            return 0
+        sent = 0
+        for slot in self.custom_slots():
+            try:
+                items = [WG.Widget.from_dict(d) for d in self.layout_of(slot)]
+                img = WG.render(items, self.widget_data(),
+                                header=self.header_for(slot, still=True))
+                if img is None:
+                    continue
+                b = base64.b64encode(WG.to_frame(img)).decode()
+                self.link.send("%%cv=%d,%s" % (slot, b), echo=False)
+                sent += 1
+            except Exception as e:
+                self._log("page %d not sent: %s" % (slot + 1, e), "err")
+        if sent:
+            self.link.send("%sv", echo=False)
+        return sent
+
     def push_settings(self):
-        """Send everything the board holds in RAM. Called on every connect,
-        because the board forgets it all when it is unplugged."""
+        """Send everything the board should be holding.
+
+        It keeps most of this in flash now and comes up with it on its own, but
+        the app is still the one that knows when you changed something - so what
+        is here wins for as long as the app is running, and the board writes
+        down whatever it is left holding."""
         order = self.cfg.get("page_order")
         if order:
             self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
@@ -1569,6 +1608,10 @@ class App(tk.Tk):
             self.cfg.get("anim_style", "classic"), 0), echo=False)
         self._apply_aod()
         self.push_alarms()
+        # After the page list, so the board knows which pages the pictures are
+        # for; a moment later, so the connect itself is not held up by six
+        # kilobytes of base64.
+        self.after(1500, self.push_pictures)
 
     def _toggle_karaoke(self):
         """Synced lyrics on the KARAOKE page.
@@ -1750,6 +1793,13 @@ class App(tk.Tk):
 
     def _quit(self):
         self._stop_send.set()
+        # The last thing the panel is left with. It saves by itself three
+        # seconds after the app goes quiet, but by then this process is gone
+        # and whatever was half-drawn is what it would have kept.
+        try:
+            self.push_pictures()
+        except Exception:
+            pass
         self.phone.stop()
         self.audio.stop()
         self.hub.stop()

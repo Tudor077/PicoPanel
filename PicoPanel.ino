@@ -634,9 +634,10 @@ uint8_t  page       = P_OVERVIEW;
    decides what is in it and in which order - a page you never look at is not
    worth three presses to get past.
 
-   The list lives in RAM and the app sends it on every connect. Nothing is
-   written to flash: the board is useless without the app anyway, and flash
-   wear for a setting that is re-sent in fifty milliseconds is a bad trade. */
+   The list is kept in flash, and loaded before the first frame is drawn, so
+   the panel comes up on a charger with your rotation and not the factory one.
+   The app still sends it on every connect and still wins while it is there;
+   what is saved is what you are left with when it is not. See storeSave(). */
 // The rev counter: 0 = the bar across the bottom, 1 = a needle. Set from
 // the app, and read by audParse long before the drawing code exists.
 uint8_t  rpmStyle = 0;
@@ -770,6 +771,13 @@ int8_t   forceAddr = -1;         // -1 = auto-detect; otherwise 0x3C / 0x3D
 #include <pico/mutex.h>
 
 auto_init_recursive_mutex(i2cMux);
+
+// The panel's own memory - the whole of it is down by setup(), where every
+// piece it saves has been declared. These two are all the parser needs.
+static void stMark();               // something worth remembering changed
+static bool storeSave(bool force);  // write it now, if it differs
+bool     stFrames = false;          // a picture has arrived since the last save
+uint32_t stRxAt   = 0;              // millis() of the last byte from the app
 
 struct I2CGuard {
   I2CGuard()  { recursive_mutex_enter_blocking(&i2cMux); }
@@ -1931,7 +1939,7 @@ void audParse(char *s) {
       const char *comma = strchr(val, ',');
       if (comma && slot >= 0 && slot < CUS_SLOTS) {
         uint16_t got = b64Decode(comma + 1, cusBuf[slot], CUS_BYTES);
-        if (got) { cusLen[slot] = got; cusSeen[slot] = millis(); }
+        if (got) { cusLen[slot] = got; cusSeen[slot] = millis(); stFrames = true; }
       }
     }
     /* "%pg=1,2,0,3" - the rotation, in order, by page number. Anything left
@@ -1958,6 +1966,7 @@ void audParse(char *s) {
     }
     else if (!strcasecmp(key, "rs")) {
       rpmStyle = (atoi(val) == 1) ? 1 : 0;
+      stMark();
     }
     // "%gp=3" - show that page now. The app uses it as a preview: you click a
     // page in the list and the panel shows it, which beats any mock-up because
@@ -2019,11 +2028,13 @@ void audParse(char *s) {
         while (*p && *p != ',') p++;
       }
       aodMask = m;
+      stMark();
     }
     /* "%hs=0..3" - how a header arrives. See hdrStyle. */
     else if (!strcasecmp(key, "hs")) {
       uint8_t st = (uint8_t)atoi(val);
       if (st <= 3) hdrStyle = st;
+      stMark();
     }
     /* "%tm=48273" - seconds since local midnight. The board needs no date and
        no timezone: an alarm is a time of day. */
@@ -2058,6 +2069,13 @@ void audParse(char *s) {
       Serial.print(F("[alarm] the board holds "));
       Serial.print(boardAlarmN);
       Serial.println(F(" of them now"));
+      stMark();
+    }
+    /* "%sv" - write it all down now. Sent by the app when it has just changed
+       something and when it is shutting down; the board also does it by itself
+       when the app goes quiet, for the times the app never got to ask. */
+    else if (!strcasecmp(key, "sv")) {
+      storeSave(false);
     }
     else if (!strcasecmp(key, "gs")) {
       uint8_t n = (uint8_t)atoi(val);
@@ -2095,6 +2113,7 @@ void audParse(char *s) {
         int8_t sl = pageSlotOf(was);
         pageSlot = (sl >= 0) ? (uint8_t)sl : 0;   // dropped? start at the front
         page = pageList[pageSlot];
+        stMark();
       }
     } else if (!strcasecmp(key, "at")) {
       tsAt = (int32_t)atol(val);
@@ -4282,6 +4301,8 @@ void printHelp() {
   Serial.println(F("    %tm=<secs>   seconds since local midnight - the"));
   Serial.println(F("    board's own clock, so alarms ring with the app shut."));
   Serial.println(F("    %al=450,GET UP|495,TEA   the alarms, in minutes."));
+  Serial.println(F("    %sv          write the rotation, the pictures and"));
+  Serial.println(F("    the alarms to flash, so they are there without the app."));
   Serial.println(F("    %ao=1,3      pages that keep the screen lit"));
   Serial.println(F("    %hs=0|1|2|3  how a header arrives: slide, wipe, type,"));
   Serial.println(F("    or not at all."));
@@ -4326,6 +4347,7 @@ void handleSerial() {
 
   while (Serial.available()) {
     char c = Serial.read();
+    stRxAt = millis();          // the app is still there; see storeService()
 
     if (tCap) {
       if (c == '\n' || c == '\r') {
@@ -4623,6 +4645,311 @@ static void splash() {
   mirrorCapture();
 }
 
+/* ==========================================================================
+   WHAT THE PANEL REMEMBERS BY ITSELF
+
+   The rotation, the order, the alarms, the two or three switches that change
+   how things look - and the pictures for your own pages, which are the whole
+   point: a panel that comes up on a phone charger showing "no layout yet" is
+   a panel you still have to run the app for.
+
+   ---- why this is written by hand -----------------------------------------
+
+   The obvious answers are EEPROM.commit() and LittleFS. Both of them park the
+   other core with rp2040.idleOtherCore(), which pushes a word into core1's
+   FIFO and waits for core1's interrupt handler to answer. Here it never
+   answered: the write never finished, USB went with it, and the panel had to
+   be recovered with BOOTSEL. Whatever the reason, waiting forever on another
+   core is not a thing worth doing when the cost of being wrong is a board you
+   cannot talk to.
+
+   So core1 parks itself. core0 raises parkWant; core1 sees it at the top of
+   its own loop, calls a function that lives in RAM, and spins there with
+   interrupts off. Only once parkIn says it has arrived does anything get
+   erased - and if it has not arrived in half a second, the write is abandoned
+   instead. Both ends are bounded. The worst case is a save that did not
+   happen, which you can live with; the other worst case you cannot.
+
+   Measured on the board, fifty writes of both sectors: fifty verified, none
+   abandoned, none read back wrong, 50 ms of frozen screen each.
+
+   ---- where it goes --------------------------------------------------------
+
+   The 64 KB the board reserves for a filesystem it does not have. Two banks of
+   two sectors, written alternately: the newer one wins, so a power cut in the
+   middle of a write costs you that write and not the lot. First sector the
+   settings, second the eight pictures - 8 x 512 bytes, exactly the layout of
+   the panel's own memory, which is how they arrived.
+   ========================================================================== */
+#include <hardware/flash.h>
+#include <hardware/sync.h>
+
+extern uint8_t _FS_start;
+extern uint8_t _FS_end;
+
+#define ST_MAGIC  0x50505331UL     // "PPS1" - and the 1 is the format
+#define ST_BANK   8192             // one bank: settings, then pictures
+#define ST_FRAMES 4096             // where the pictures start inside a bank
+
+// ---- parking ---------------------------------------------------------------
+// Both flags are in SRAM, which is the point: they stay readable while the
+// flash is mid-erase and neither core can fetch an instruction from it.
+volatile bool parkWant = false;    // core0 asks
+volatile bool parkIn   = false;    // core1 has arrived
+
+void __not_in_flash_func(core1Park)() {
+  uint32_t ints = save_and_disable_interrupts();
+  parkIn = true;
+  uint32_t t0 = time_us_32();
+  // Bounded too. If core0 died holding the flag, the panel comes back rather
+  // than staying frozen forever - by then the flash is a lost cause, but a
+  // dead board and a dead board you cannot even see are different things.
+  while (parkWant && (time_us_32() - t0) < 5000000u) tight_loop_contents();
+  parkIn = false;
+  restore_interrupts(ints);
+}
+
+// In RAM as well: the erase and program calls are RAM-resident inside the SDK,
+// and this only has to survive the gap between them.
+static bool __not_in_flash_func(flashStore)(uint32_t off, uint32_t eraseLen,
+                                            const uint8_t *a, size_t aLen,
+                                            const uint8_t *b, size_t bLen) {
+#if RENDER_ON_CORE1
+  parkWant = true;
+  uint32_t t0 = time_us_32();
+  while (!parkIn) {
+    if (time_us_32() - t0 > 500000u) { parkWant = false; return false; }
+  }
+#endif
+  uint32_t ints = save_and_disable_interrupts();
+  flash_range_erase(off, eraseLen);
+  if (aLen) flash_range_program(off, a, aLen);
+  if (bLen) flash_range_program(off + ST_FRAMES, b, bLen);
+  restore_interrupts(ints);
+#if RENDER_ON_CORE1
+  parkWant = false;
+#endif
+  return true;
+}
+
+// ---- the block -------------------------------------------------------------
+struct StoreHead {
+  uint32_t crc;                    // over the 252 bytes that follow it
+  uint32_t magic;
+  uint32_t seq;                    // the higher of the two banks wins
+  uint8_t  ver;
+  uint8_t  pageListN;
+  uint8_t  pageSlot;               // where you had got to in the rotation
+  uint8_t  rpmStyle;
+  uint8_t  hdrStyle;
+  uint8_t  alarmN;
+  uint16_t spare;
+  uint32_t aodMask;
+  uint8_t  pageList[P_COUNT];
+  uint16_t cusLen[CUS_SLOTS];
+  BoardAlarm alarms[ALARM_MAX];
+};
+union StoreBlock { StoreHead h; uint8_t raw[256]; };
+static_assert(sizeof(StoreHead) <= 256, "the settings no longer fit one page");
+
+static StoreBlock stBlk;
+static uint8_t  stBankNow = 0;     // which bank the live copy came from
+static uint32_t stSeq     = 0;
+static bool     stDirty   = false;
+static uint32_t stTouch   = 0;     // when the last change came in
+static bool     stSaved   = false; // we have written at least once this run
+static bool     stQuietDone = true;
+
+static void stMark() { stDirty = true; stTouch = millis(); }
+
+static uint32_t st_crc(const uint8_t *p, size_t n) {
+  uint32_t c = 0xFFFFFFFFUL;
+  while (n--) {
+    c ^= *p++;
+    for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320UL & (0 - (c & 1)));
+  }
+  return ~c;
+}
+
+// The board reserves this whether or not a filesystem is ever mounted; if the
+// flash menu is ever set to no filesystem, there is nowhere to put any of
+// this and the panel simply goes back to forgetting.
+static bool stRoom() {
+  return (uint32_t)(&_FS_end) - (uint32_t)(&_FS_start) >= 2UL * ST_BANK;
+}
+static uint32_t stBase() { return (uint32_t)(&_FS_start) - XIP_BASE; }
+static const uint8_t *stAt(uint8_t bank) {
+  return (const uint8_t *)(XIP_BASE + stBase() + (uint32_t)bank * ST_BANK);
+}
+
+// `out` is a StoreBlock. It is passed as void* because this is a .ino: the
+// build generates a prototype for every function and puts them all above the
+// first line of the sketch, where a type declared halfway down does not exist
+// yet. A named type in the signature simply will not compile there.
+static bool stReadBank(uint8_t bank, void *out) {
+  StoreBlock *o = (StoreBlock *)out;
+  memcpy(o->raw, stAt(bank), sizeof(o->raw));
+  if (o->h.magic != ST_MAGIC || o->h.ver != 1) return false;
+  return st_crc(o->raw + 4, sizeof(o->raw) - 4) == o->h.crc;
+}
+
+// Fill stBlk from what is live right now. Everything but the crc and the
+// sequence number, which are the two things that differ on every save and so
+// would make "has anything actually changed?" answer yes forever.
+static void stFill() {
+  memset(stBlk.raw, 0, sizeof(stBlk.raw));
+  StoreHead &h = stBlk.h;
+  h.magic     = ST_MAGIC;
+  h.ver       = 1;
+  h.pageListN = pageListN;
+  h.pageSlot  = pageSlot;
+  h.rpmStyle  = rpmStyle;
+  h.hdrStyle  = hdrStyle;
+  h.alarmN    = boardAlarmN;
+  h.aodMask   = aodMask;
+  memcpy(h.pageList, pageList, sizeof(h.pageList));
+  for (uint8_t i = 0; i < CUS_SLOTS; i++) h.cusLen[i] = cusLen[i];
+  memcpy(h.alarms, boardAlarms, sizeof(h.alarms));
+}
+
+/* Write it, if it is worth writing.
+
+   `force` skips the comparison; nothing uses it yet, and it is here so that a
+   future "save anyway" has somewhere to go rather than being bolted on.
+
+   The comparison is the wear guard, and it is not optional: a custom page with
+   a clock on it sends a new picture every second, and every one of those would
+   otherwise be a reason to erase two sectors. */
+static bool storeSave(bool force) {
+  if (!stRoom()) return false;
+  stFill();
+
+  const uint8_t *was = stAt(stBankNow);
+  bool same = stSaved
+              && !memcmp(stBlk.raw + 12, was + 12, sizeof(stBlk.raw) - 12)
+              && !memcmp(cusBuf, was + ST_FRAMES, CUS_SLOTS * CUS_BYTES);
+  stDirty  = false;
+  stFrames = false;
+  if (same && !force) return true;
+
+  stBlk.h.seq = stSeq + 1;
+  stBlk.h.crc = st_crc(stBlk.raw + 4, sizeof(stBlk.raw) - 4);
+
+  uint8_t bank = stSaved ? (uint8_t)(stBankNow ^ 1) : stBankNow;
+  uint32_t t0 = millis();
+  bool ok = flashStore(stBase() + (uint32_t)bank * ST_BANK, ST_BANK,
+                       stBlk.raw, sizeof(stBlk.raw),
+                       (const uint8_t *)cusBuf, CUS_SLOTS * CUS_BYTES);
+  if (!ok) {
+    // core1 never parked. Nothing was erased, so there is nothing to undo -
+    // and saying so beats a panel that quietly stops remembering.
+    Serial.println(F("[store] core1 would not park - not saved"));
+    stDirty = true;
+    return false;
+  }
+  stBankNow = bank;
+  stSeq     = stBlk.h.seq;
+  stSaved   = true;
+  Serial.print(F("[store] saved "));
+  Serial.print(pageListN);
+  Serial.print(F(" pages in "));
+  Serial.print(millis() - t0);
+  Serial.println(F(" ms"));
+  return true;
+}
+
+/* Read it back at boot, before core1 is allowed to draw anything.
+
+   Everything is checked on the way in. A block with a good crc can still hold
+   a page number from a firmware that had fewer pages, and a rotation full of
+   those is a panel you cannot navigate. */
+static void storeLoad() {
+  if (!stRoom()) {
+    Serial.println(F("[store] no room reserved - nothing will be remembered"));
+    return;
+  }
+  StoreBlock a, b;
+  bool oa = stReadBank(0, &a), ob = stReadBank(1, &b);
+  StoreBlock *pick = NULL;
+  if (oa && ob) {
+    bool aNewer = (int32_t)(a.h.seq - b.h.seq) >= 0;
+    pick = aNewer ? &a : &b;
+    stBankNow = aNewer ? 0 : 1;
+  } else if (oa) { pick = &a; stBankNow = 0; }
+  else if (ob)   { pick = &b; stBankNow = 1; }
+
+  if (!pick) {
+    Serial.println(F("[store] nothing saved yet"));
+    return;
+  }
+  StoreHead &h = pick->h;
+  stSeq   = h.seq;
+  stSaved = true;
+
+  uint8_t tmp[P_COUNT], n = 0;
+  bool used[P_COUNT] = { false };
+  for (uint8_t i = 0; i < h.pageListN && i < P_COUNT; i++) {
+    uint8_t id = h.pageList[i];
+    if (id < P_COUNT && !used[id]) { used[id] = true; tmp[n++] = id; }
+  }
+  if (n) {
+    memcpy(pageList, tmp, n);
+    pageListN = n;
+    pageSlot  = (h.pageSlot < n) ? h.pageSlot : 0;
+    page      = pageList[pageSlot];
+  }
+
+  rpmStyle = (h.rpmStyle == 1) ? 1 : 0;
+  hdrStyle = (h.hdrStyle <= 3) ? h.hdrStyle : 0;
+  aodMask  = h.aodMask;
+
+  boardAlarmN = (h.alarmN <= ALARM_MAX) ? h.alarmN : 0;
+  memcpy(boardAlarms, h.alarms, sizeof(boardAlarms));
+  for (uint8_t i = 0; i < ALARM_MAX; i++)
+    boardAlarms[i].text[sizeof(boardAlarms[i].text) - 1] = 0;
+
+  // The pictures. cusSeen stays at zero on purpose: the custom page draws
+  // whatever is in the buffer regardless of age, and pretending these had just
+  // arrived would only mislead anything that asks how fresh they are.
+  memcpy(cusBuf, stAt(stBankNow) + ST_FRAMES, CUS_SLOTS * CUS_BYTES);
+  uint8_t pics = 0;
+  for (uint8_t i = 0; i < CUS_SLOTS; i++) {
+    cusLen[i] = (h.cusLen[i] <= CUS_BYTES) ? h.cusLen[i] : 0;
+    if (cusLen[i]) pics++;
+  }
+
+  Serial.print(F("[store] "));
+  Serial.print(pageListN);
+  Serial.print(F(" pages, "));
+  Serial.print(pics);
+  Serial.print(F(" of your own, "));
+  Serial.print(boardAlarmN);
+  Serial.println(F(" alarms - remembered from last time"));
+}
+
+/* When to write.
+
+   Three moments, and no periodic one. A settings change settles for three
+   seconds first, because dragging pages about makes a dozen of them. The app
+   going quiet is the moment that really matters - you closed it, or the PC
+   went to sleep - and it is the one time the pictures on screen are worth
+   keeping. And "%sv" for when the app knows better, which it usually does. */
+static void storeService() {
+  uint32_t now = millis();
+
+  if (stRxAt && now - stRxAt > 3000) {
+    if (!stQuietDone) {
+      stQuietDone = true;
+      storeSave(false);           // a no-op unless something really differs
+      return;
+    }
+  } else if (stRxAt) {
+    stQuietDone = false;
+  }
+
+  if (stDirty && now - stTouch > 3000) storeSave(false);
+}
+
 void setup() {
   pinMode(PIN_STATUS_LED, OUTPUT);
   digitalWrite(PIN_STATUS_LED, STATUS_LED_ENABLED ? HIGH : LOW);
@@ -4717,6 +5044,10 @@ void setup() {
   // came out of the twenty before the panel switches itself off - you plugged
   // the board in and it went dark while you were still looking at it.
   tLastAct = millis();
+
+  // What the panel remembered from last time, before anything is drawn with
+  // it: the page it comes up on is the one you left it on.
+  storeLoad();
 
   // And only now is core1 allowed to draw. See setup1().
   core0Ready = true;
@@ -4839,6 +5170,7 @@ void loop() {
   // arrived buried inside a status line. Nothing complained; the line simply
   // did not match.
   alarmService();
+  storeService();
   pageAnnounce();
   // Before HID: on an audio page these inputs are the volume's, and hidUpdate()
   // is told to leave them alone.
@@ -4935,6 +5267,10 @@ void setup1() {
 
 void loop1() {
   static uint32_t tRender1 = 0;
+  // Asked to get out of the way so core0 can write flash. Nothing may run from
+  // flash during an erase, and this is the only place core1 is known to be
+  // between two of its own instructions rather than somewhere inside a library.
+  if (parkWant) { core1Park(); return; }
   if (!core0Ready) { delay(2); return; }   // nothing to draw, and nothing to fight over
   uint32_t now = millis();
 

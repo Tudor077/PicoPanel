@@ -45,9 +45,9 @@ DEFAULTS = {
     # and only once per track - but it is your listening, so you turn it on.
     "karaoke": False,
 
-    # The board's own settings. It holds these in RAM only and forgets them the
-    # moment it is unplugged, so the app sends them again on every connect -
-    # which beats wearing out flash for something re-sent in fifty milliseconds.
+    # The board's own settings. It keeps these in its own flash now and comes
+    # up with them on a charger, with no app anywhere; what is here is still
+    # what wins while the app is running, and is sent on every connect.
     "page_order": None,     # None = the board's own order, all of them
     "rpm_style": 0,         # 0 a bar, 1 a needle
     "i2c_khz": 400,
@@ -71,9 +71,10 @@ DEFAULTS = {
     # list shows the pages you built and not eight empty ones.
     "custom_pages": [0],
 
-    # Alarms: [{"at": "07:30", "text": "GET UP", "on": true}]. The app keeps
-    # the clock and the list; the board is told to flash, and flashes over
-    # whatever page is up - an alarm you only see on the right page is not one.
+    # Alarms: [{"at": "07:30", "text": "GET UP", "on": true}]. Handed to the
+    # board, which keeps them in its own flash and rings them itself over
+    # whatever page is up - an alarm you only see on the right page is not one,
+    # and one that needs the app running is not one either.
     "alarms": [],
 
     # Listen for the phone's alarms on port 8787. Off by default: it opens a

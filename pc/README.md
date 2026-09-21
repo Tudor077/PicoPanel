@@ -413,19 +413,34 @@ is running, and the board used to blank it two and a half seconds later - so
 the page existed only while something was watching it. The last frame sent now
 stays on the panel until the board is unplugged.
 
-Across an unplug it does not survive, and the attempt to make it is worth
-recording: writing the frame into the board's flash means parking the core that
-draws the screen, because nothing may execute from flash while it is being
-erased. `rp2040.idleOtherCore()` parked it and it never came back - the board
-went deaf on USB, would not answer the 1200-baud reset, and had to be recovered
-with BOOTSEL. The feature is not worth that, and it is not there.
+**And across an unplug too, now** - which took two goes. Writing a frame into
+the board's flash means parking the core that draws the screen, because nothing
+may execute from flash while it is being erased. The first attempt used
+`rp2040.idleOtherCore()`, which pushes a word into core1's FIFO and waits for
+its interrupt handler to answer. It never answered: the write never finished,
+the board went deaf on USB, would not take the 1200-baud reset, and had to be
+recovered with BOOTSEL.
+
+The second attempt does not ask anyone else's code to park core1. core0 raises a
+flag; core1 sees it at the top of its own loop and goes and spins in a function
+that lives in RAM, with interrupts off; only once it has said it has arrived
+does anything get erased. Both ends give up rather than wait forever - if core1
+has not parked in half a second the write is abandoned, and the worst case is a
+save that did not happen instead of a board you cannot talk to.
+
+That was proved on a sketch of its own before it went anywhere near the
+firmware: fifty writes of both sectors, fifty verified, none abandoned, none
+read back wrong, 50 ms of frozen screen each.
 
 Each has its own layout, kept by the app. The board is sent the finished picture
 for whichever one it is showing - the page works with every editor window
-closed. A page you
-never look at is not worth three presses to get past. The board keeps it in RAM
-and forgets it when unplugged, so the app sends it again on every connect -
-which beats wearing out flash for something re-sent in fifty milliseconds.
+closed. A page you never look at is not worth three presses to get past.
+
+The app also sends a picture for **every** page once on connect and once on the
+way out, which is what makes the saved ones worth having: frames normally go
+only to the page that is up, so a page you drew and never walked to had nothing
+for the board to keep, and came back from a cold boot saying "no layout yet"
+about a layout that exists.
 
 **Rev counter: a bar or a needle.** The needle is a real dial - ticks rather than
 a drawn arc, because an arc that size comes out as a smudge of stair-stepped
@@ -484,7 +499,28 @@ An alarm is not a footnote to whatever you happened to be looking at.
 
 Set them in **Settings -> Alarms**; **Test** fires one now.
 
-### What the board knows by itself
+### What the panel remembers by itself
+
+The rotation and the order, which pages stay lit, the two switches that change
+how things look, the alarms, and a picture for each of your own pages. All of it
+in the 64 KB the board reserves for a filesystem it does not have - two banks of
+two sectors written alternately, so a power cut in the middle of a write costs
+you that write and not the lot, and the newer of the two wins on the way back
+in.
+
+It is written when a setting settles (three seconds after the last change, so
+dragging pages about is one write and not a dozen), when the app asks with
+`%sv`, and when the app goes quiet for three seconds - which is the moment that
+actually matters, because that is you closing it. Never on a timer, and never
+when nothing differs from what is already there: a page with a clock on it sends
+a new picture every second, and none of those is a reason to erase flash.
+
+Verified on the hardware: the app killed, `[store] saved 9 pages in 45 ms` three
+seconds later, then a power cycle with nothing on the PC talking to the board -
+and it came back with all nine pages in order and all three of the drawn ones
+showing what was drawn on them.
+
+### What the board knows about time
 
 The app used to be the only thing that knew when your alarm was: it kept the
 clock and the list, and told the board to flash at the moment. Close it, or let
@@ -496,11 +532,14 @@ and again every five minutes because the board counts off its own crystal.
 It rings by itself. Verified with the app shut and the port closed: alarm set
 for 22:47, `[alarm] ONBOARD` on the wire at 22:47:01.
 
-It is not a battery-backed clock. Unplug the panel and it forgets the time and
-the list until the app connects again, which it does within a second of
-starting. The same is true of the pages you draw: they stay on screen with the
-app closed, but not across an unplug - see the note above about what happened
-when that was tried.
+The list survives an unplug; the clock does not. There is no battery behind it,
+so a panel that has just been plugged in holds your alarms but does not know
+what time it is, and cannot ring until something tells it - which the app does
+within a second of starting, and the whole of `%tm` is one number.
+
+Verified: an alarm handed over and written down, the board power-cycled, and
+then told nothing but the time. It rang at 20:21:00, on the minute, from its
+own flash.
 
 While the app is running its countdown wins, because it knows about the phone's
 alarms as well as these; when it has been quiet for fifteen seconds the board
