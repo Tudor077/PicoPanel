@@ -423,7 +423,12 @@ def _cell(d, x, y, cw, ch, text, on):
     """One key: filled while it is held, outlined while it is not - which is
     how the board draws its own button row."""
     d.rectangle([x, y, x + cw - 1, y + ch - 1], fill=1 if on else 0, outline=1)
-    if text:
+    # Eight rows is what the smallest font needs. Under that the digits did not
+    # shrink to fit - there is nothing smaller to shrink to - they spilled over
+    # the cell's own outline and came out as a smear on top of it. A switch
+    # drawn eight pixels high is a switch you read by which cell is filled, and
+    # that still works.
+    if text and ch >= 8:
         d.text((x + 2, y + max(0, (ch - 10) // 2)), text,
                font=_font(9 if ch >= 11 else 8), fill=0 if on else 1)
 
