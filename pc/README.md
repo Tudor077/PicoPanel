@@ -533,6 +533,37 @@ It now puts back what was actually there - page, slot and both sub-page numbers,
 noted before the first press does anything - rather than guessing what moved.
 That covers all four branches and the next one too.
 
+### When it disappears on you
+
+Two separate things, and only one of them is settled.
+
+**The loop that ran the interface could be stopped by a single exception.** It
+rescheduled itself at the end of its own body, so anything that escaped ended
+it: the window stayed on screen and went dead - no frames, no telemetry, no
+tray updates - and the only way back was to start the program again. It now
+catches whatever comes out of one turn, writes it down, and takes the next
+turn. Being wrong for a fiftieth of a second is a far smaller thing than being
+dead until somebody notices.
+
+**And Windows has recorded eleven access violations inside Tcl or Tk in a
+month**, which is the C library going down and taking the process with it -
+nothing Python can catch, and nothing written anywhere. That one is NOT fixed,
+because it has not been reproduced: thirty-one open-and-close cycles, ninety
+seconds of hunting for a Tk call from the wrong thread (there are none), and
+two thousand image allocations watched to see which thread frees them (all the
+right one) produced nothing.
+
+What did come out of it: everything the program throws now lands in
+`crash.log`, next to the settings, and `faulthandler` is armed, so an access
+violation writes the Python stack of every thread before the process dies. The
+next one will say what it was.
+
+The mirror also stopped building two whole Tk images per frame and throwing
+both away - forty a second, for a picture that changes in place perfectly well.
+It is two images now, made once and written into. That is worth doing on its
+own, and it happens to be the heaviest thing in the program that only runs
+while the window is open, which is the description of the fault.
+
 ## What it costs while you are not looking
 
 Measured on this machine, the app sitting in the tray with the board connected:

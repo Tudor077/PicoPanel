@@ -966,8 +966,9 @@ class App(tk.Tk):
             # mark either. Both are states of the moment, and a picture that
             # outlives the moment should not still be claiming them - a panel
             # on a charger saying LOCK with no gamepad anywhere is a lie.
-            plain = where
-            if not self.faces_of(slot) > 1:
+            if faces > 1:
+                plain = "%d/%d" % (min(face, faces - 1) + 1, faces)
+            else:
                 plain = ("%d/%d" % (order.index(pg) + 1, len(order))
                          if pg in order else "")
             return (name, plain, 0, "", 1.0)
@@ -2119,6 +2120,43 @@ class App(tk.Tk):
 
     # -------------------------------------------------- loop
     def _pump(self):
+        """One turn of the interface, and then the next one - whatever happens.
+
+        This used to reschedule itself only at the end of its own body, so a
+        single exception anywhere inside stopped it permanently. The window
+        stayed on screen and went dead: no frames, no telemetry, no tray
+        updates, nothing but a restart. Being wrong for one fiftieth of a
+        second is a much smaller thing than that, so it is written down and the
+        loop carries on.
+        """
+        try:
+            self._turn()
+        except Exception:
+            crash_log(*sys.exc_info())
+        self.after(self._pump_delay(), self._pump)
+
+    def _pump_delay(self):
+        """How long until the next turn.
+
+        Hidden in the tray nobody is drawing anything - no point spinning 20
+        times a second to update invisible widgets. Telemetry to the board is
+        rate-limited separately, in _send_loop.
+
+        With the mirror running we turn faster than the frames arrive: at 50 ms
+        a 20 fps stream would wait up to half a frame here and the screen would
+        visibly trail the panel.
+
+        Out here rather than at the end of the body, because the delay has to
+        be decided even on a turn that threw.
+        """
+        try:
+            if self.state() != "normal":
+                return 250
+            return 20 if self.mirror_var.get() else 50
+        except Exception:
+            return 100
+
+    def _turn(self):
         self._keep_service()
         # Frames are coalesced: at 20 a second several can pile up between two
         # turns of this loop, and drawing the ones already superseded would cost
@@ -2179,20 +2217,7 @@ class App(tk.Tk):
             self.tel_time = now
             self._update_tip()
 
-        # Hidden in the tray nobody is drawing anything - no point spinning 20
-        # times a second to update invisible widgets. Telemetry to the board is
-        # rate-limited separately, in _send_loop.
-        #
-        # With the mirror running we turn faster than the frames arrive: at 50 ms
-        # a 20 fps stream would wait up to half a frame here and the screen would
-        # visibly trail the panel.
-        if self.state() != "normal":
-            delay = 250
-        elif self.mirror_var.get():
-            delay = 20
-        else:
-            delay = 50
-        self.after(delay, self._pump)
+        # and _pump schedules the next turn, whether this one went well or not
 
     def _send_loop(self):
         """The only place that sends telemetry. Its own rate, independent of how
@@ -2293,13 +2318,26 @@ class App(tk.Tk):
                 MIRROR_LIT if data[base + x] & bit else MIRROR_DARK
                 for x in range(w)) + "}")
 
-        img = tk.PhotoImage(width=w, height=h)
-        img.put(" ".join(rows))
-        img = img.zoom(MIRROR_SCALE)
-        self.mirror_canvas.configure(width=w * MIRROR_SCALE, height=h * MIRROR_SCALE)
-        self.mirror_canvas.delete("all")
-        self.mirror_canvas.create_image(0, 0, image=img, anchor="nw")
-        self._fb_img = img           # keep it alive, or Tk shows nothing
+        # Two images, made once and written into ever after. It used to build
+        # both of them per frame and drop both - forty Tk images a second
+        # created and destroyed, for a picture that changes in place perfectly
+        # well. The canvas item is created once too, and follows the image it
+        # was given without being told.
+        small = getattr(self, "_fb_small", None)
+        if small is None or small.width() != w or small.height() != h:
+            small = self._fb_small = tk.PhotoImage(width=w, height=h)
+            big = self._fb_img = tk.PhotoImage(width=w * MIRROR_SCALE,
+                                               height=h * MIRROR_SCALE)
+            self.mirror_canvas.configure(width=w * MIRROR_SCALE,
+                                         height=h * MIRROR_SCALE)
+            self.mirror_canvas.delete("all")
+            self.mirror_canvas.create_image(0, 0, image=big, anchor="nw")
+        small.put(" ".join(rows))
+        big = self._fb_img
+        # Tcl's own "copy -zoom", which writes into the destination instead of
+        # handing back a new image the way PhotoImage.zoom() does.
+        big.tk.call(str(big), "copy", str(small), "-zoom",
+                    MIRROR_SCALE, MIRROR_SCALE)
 
         # Kept for the page cards: they are photographed by driving the board
         # from page to page. The counter is how the walk knows a frame is one
@@ -2378,10 +2416,57 @@ class App(tk.Tk):
                                    foreground=theme.PAL["dim"])
 
 
+def crash_log(*exc):
+    """Everything that gets this far, in a file you can find.
+
+    Built windowed, this program has no console: an exception on the Tk
+    callback that runs the whole interface printed itself to a stream nobody
+    was reading and the window went away with no explanation at all. Which is
+    how the one below was found.
+    """
+    import traceback
+    try:
+        path = os.path.join(os.path.dirname(settings._path()), "crash.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n==== %s ====\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+            traceback.print_exception(*exc[:3], file=f)
+    except Exception:
+        pass
+    try:
+        traceback.print_exception(*exc[:3])
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     # The serial port is exclusive: a second copy can only sit there failing to
     # open it. Clicking the shortcut again now raises the one that IS running.
     if not single.claim():
         single.wake_the_other()
         sys.exit(0)
-    App(hidden="--hidden" in sys.argv).mainloop()
+    # Tcl and Tk are C libraries, and when they go down they take the process
+    # with them without raising anything Python can catch - which is what has
+    # been happening: Windows records an access violation in tk86t.dll and the
+    # window simply disappears. faulthandler writes the Python stack of every
+    # thread at the moment of the fault, which is the only way to see which of
+    # them was in Tk when it went.
+    try:
+        import faulthandler
+        _fault = open(os.path.join(os.path.dirname(settings._path()),
+                                   "crash.log"), "a", encoding="utf-8")
+        _fault.write("\n==== started %s ====\n"
+                     % time.strftime("%Y-%m-%d %H:%M:%S"))
+        _fault.flush()
+        faulthandler.enable(file=_fault, all_threads=True)
+    except Exception:
+        pass
+
+    sys.excepthook = crash_log
+    try:
+        threading.excepthook = lambda a: crash_log(a.exc_type, a.exc_value,
+                                                   a.exc_traceback)
+    except Exception:
+        pass
+    app = App(hidden="--hidden" in sys.argv)
+    app.report_callback_exception = crash_log
+    app.mainloop()
