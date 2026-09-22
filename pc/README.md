@@ -833,7 +833,7 @@ The panel's own state is all there too - the buttons, both switches, the
 encoder, the frame rate, whether HID is armed - because the board reports every
 bit of it five times a second anyway. So are the track's position, length and
 whether it is playing, which is what the board's own MUSIC page is built out
-of: a Bar pointed at **Track position %** with the *faded track* fill IS the
+of: a Bar pointed at **How far through %** with the *faded track* fill IS the
 song bar.
 
 The axes come from `sticks.py` - Windows' own joystick API through ctypes, no

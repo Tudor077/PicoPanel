@@ -51,8 +51,11 @@ FIELDS = [
     ("joy_z", "Stick Z"),           ("joy_r", "Stick R"),
     # What's playing, beyond the two strings: the board's own MUSIC page is
     # built out of these, so a page of yours can be too.
-    ("np_pct", "Track position %"), ("np_pos", "Track seconds"),
-    ("np_dur", "Track length"),     ("np_playing", "Playing"),
+    # "Track position" made somebody ask what it was, which is a fair
+    # question about a name that could mean the place in a playlist. These say
+    # what they are: how far through, and the two times it is made of.
+    ("np_pct", "How far through %"), ("np_pos", "Seconds played"),
+    ("np_dur", "Track length s"),    ("np_playing", "Playing"),
     # The panel itself. It reports all of this five times a second anyway.
     ("enc", "Encoder"),             ("enc_total", "Encoder total"),
     ("sw1", "Switch 1"),            ("sw2", "Switch 2"),
@@ -145,6 +148,21 @@ class Widget:
     label: str = ""
     size: int = 14           # text height, for the kinds that have text
     opts: dict = dc_field(default_factory=dict)
+
+    def __post_init__(self):
+        """A copy of opts, always, whoever handed it over.
+
+        The shelf builds widgets with Widget(kind=k, **defaults), and defaults
+        is the very dict written in PALETTE - so every Switch dropped on a page
+        held a reference to ONE opts, the same one, for the life of the
+        program. Put a three-position switch and a five-position switch on the
+        same page and they were the same switch: changing which one showed
+        changed the other, and the shelf's own icon with it.
+
+        Guarded here rather than at the two call sites, because the next one
+        would not know to do it either.
+        """
+        self.opts = dict(self.opts or {})
 
     def to_dict(self):
         return {"kind": self.kind, "x": self.x, "y": self.y, "w": self.w,
