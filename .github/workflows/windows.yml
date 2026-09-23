@@ -1,0 +1,79 @@
+name: Windows EXE
+
+# Builds PicoPanel.exe and attaches it to the run and to a release, so it can
+# be installed straight onto any Windows PC from the release page - no Python,
+# no admin rights, no build tools. Copy the one .exe over (a USB stick works)
+# and double-click it. Made for locked-down machines like a school lab PC.
+
+on:
+  push:
+    paths:
+      - 'pc/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'pc/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write        # needed to attach the exe to a release
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the dependencies
+        working-directory: pc
+        shell: pwsh
+        # The WinRT "now playing" packages are optional and occasionally have no
+        # wheel for a given Python; let them fail without failing the build, the
+        # feature just turns off. Everything the panel needs is in the first
+        # install and that one must succeed.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyserial pywin32 Pillow pycaw comtypes psutil pyinstaller
+          pip install "winrt-Windows.Media.Control" "winrt-Windows.Foundation" `
+            || echo "WinRT media session support skipped - 'now playing' will be off"
+
+      - name: Build the exe
+        working-directory: pc
+        run: python build.py
+
+      - name: Name it after the run
+        shell: bash
+        run: |
+          mkdir -p out
+          cp PicoPanel.exe "out/PicoPanel-${GITHUB_RUN_NUMBER}.exe"
+          ls -lh out
+
+      - name: Upload the exe to the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: PicoPanel-exe
+          path: out/*.exe
+          if-no-files-found: error
+
+      # An Actions artifact is a login-gated zip, awkward to grab on a locked
+      # PC. A release asset is a direct .exe link you can just download.
+      - name: Publish it as a release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pc-build-${{ github.run_number }}
+          name: PicoPanel PC build ${{ github.run_number }}
+          prerelease: true
+          files: out/*.exe
+          body: |
+            Single-file PicoPanel.exe, built from `${{ github.sha }}`.
+
+            Download it, copy it onto the PC (a USB stick is fine) and
+            double-click. No Python, no install, no admin rights. Telemetry
+            listens on 127.0.0.1, so there is no firewall prompt either.

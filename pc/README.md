@@ -16,7 +16,21 @@ cable. Starting it again now raises the copy that is already running. A named
 mutex, held by the kernel, so a crash cannot leave it behind the way a lock file
 can.
 
-## Starting it
+## Installing it on a locked-down PC (no Python, no admin)
+
+For a machine where you can't install Python or run as admin - a school lab PC,
+say - grab the prebuilt single file instead of running the source:
+
+1. On GitHub, open **Releases** and take the newest `PicoPanel.exe` (the
+   `pc-build-*` entries). It's one file with Python baked in.
+2. Copy it onto the PC - a USB stick is fine - and double-click it.
+
+No install, no admin rights, nothing to configure. Telemetry listens on
+`127.0.0.1`, so there's no firewall prompt either. The release is built
+automatically by `.github/workflows/windows.yml` every time the `pc/` code
+changes.
+
+## Starting it (from source)
 
 ```
 python panel.py
