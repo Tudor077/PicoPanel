@@ -380,8 +380,15 @@ class Ets2HttpSource(Source):
         # well below the maximum, unlike a car.
         rpm_max = truck.get("engineRpmMax") or 0.0
 
-        blk = ((1 if truck.get("blinkerLeftActive") else 0)
-               | (2 if truck.get("blinkerRightActive") else 0))
+        # "On" is the lamp, flashing as it does on the dash; "Active" is the
+        # stalk, steady for as long as it is down. The lamp is what the screen
+        # should show - it is what makes the arrow blink. Older servers only
+        # have "Active".
+        def _lamp(side):
+            v = truck.get("blinker%sOn" % side)
+            return truck.get("blinker%sActive" % side) if v is None else v
+
+        blk = (1 if _lamp("Left") else 0) | (2 if _lamp("Right") else 0)
 
         return Telemetry(
             src=label,
