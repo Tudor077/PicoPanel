@@ -69,7 +69,8 @@ jobs:
         with:
           tag_name: pc-build-${{ github.run_number }}
           name: PicoPanel PC build ${{ github.run_number }}
-          prerelease: true
+          prerelease: false        # a full release, shown as "Latest"
+          make_latest: true        # this build becomes the headline download
           files: out/*.exe
           body: |
             Single-file PicoPanel.exe, built from `${{ github.sha }}`.
