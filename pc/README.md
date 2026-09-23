@@ -908,6 +908,19 @@ buffer was never the problem.
 The single-frame splash it replaced got away with it. A number that happens to
 be big enough is not a synchronisation, so core1 now waits for a flag.
 
+## No firewall prompt
+
+The UDP telemetry listeners (OutGauge on 4444, the CorsaConnect mirror on 5051)
+bind to `127.0.0.1`, not `0.0.0.0`. That's deliberate: the sim runs on this same
+PC and sends to loopback, and Windows never filters loopback traffic - so you
+get **no firewall prompt, no rule to click, no admin**. Binding `0.0.0.0` is
+exactly what would make Windows pop *"allow Python on private/public networks?"*,
+because that asks to receive from the LAN.
+
+If you actually send telemetry from **another machine** (a second PC, a phone),
+that path does cross the firewall, so start the app with `PICOPANEL_BIND=0.0.0.0`
+and allow it once when Windows asks. Everything binds to that address instead.
+
 ## Sharing OutGauge with CorsaConnect
 
 OutGauge has exactly one listener, and
