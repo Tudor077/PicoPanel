@@ -41,6 +41,9 @@ FIELDS = [
     ("kts", "Airspeed kt"),         ("vspeed_fpm", "Vertical speed"),
     ("alt_ft", "Altitude ft"),      ("hdg", "Heading"),
     ("gforce", "G"),                ("aoa", "Angle of attack"),
+    # The turn signals, 1 while that lamp is lit. They flash as the game
+    # flashes them, so a lamp pointed at one blinks by itself.
+    ("blink_l", "Left signal"),     ("blink_r", "Right signal"),
     ("src", "Source name"),         ("text", "Vehicle / text"),
     ("np_title", "Track title"),    ("np_artist", "Artist"),
     ("clock", "Clock"),             ("none", "(nothing)"),
@@ -70,7 +73,7 @@ FIELD_LABEL = dict(FIELDS)
 _TEXTY = ["src", "text", "np_title", "np_artist", "clock"]
 _NUMERIC = ["speed_kmh", "rpm", "rpm_max", "redline", "gear", "fuel_pct",
             "throttle", "brake", "turbo_bar", "engine_c", "kts", "vspeed_fpm",
-            "alt_ft", "hdg", "gforce", "aoa",
+            "alt_ft", "hdg", "gforce", "aoa", "blink_l", "blink_r",
             "np_pct", "np_pos", "np_dur", "np_playing",
             "enc", "enc_total", "sw1", "sw2", "fps", "hid"]
 _AXES = ["joy_x", "joy_y", "joy_z", "joy_r"]
@@ -85,7 +88,7 @@ _SCALED = ["rpm", "speed_kmh", "fuel_pct", "throttle", "brake", "turbo_bar",
 # were numbers you could turn all day for nothing. They are not offered now.
 AUTO_SIZE = {"value", "label"}
 USES_W = {"bar", "vbar", "dial", "box", "line", "axis", "dz", "btn", "btnrow",
-          "knob", "disc", "switch"}
+          "knob", "disc", "switch", "blinker"}
 # The alarm sizes itself around the bell and the time left.
 AUTO_ALARM = {"alarm"}
 USES_H = USES_W | {"lamp"}
@@ -106,6 +109,7 @@ KIND_FIELDS = {
     "disc":   ["none"],
     "switch": ["none"],
     "alarm":  ["none"],
+    "blinker": ["none"],             # which side is a choice, not a field
 }
 
 
@@ -507,6 +511,34 @@ def _d_switch(d, w, data):
               str(i + 1) if cw >= 8 else "", pos == i + 1)
 
 
+def _arrow(d, tip, cy, half, left, on):
+    """One blinker arrow, the triangle the GAME page draws: the tip at `tip`,
+    `half` rows above and below the middle. Filled while lit, outlined while
+    not - an arrow that vanishes is one you cannot place in the editor."""
+    back = tip + (half + 2) * (1 if left else -1)
+    pts = [(tip, cy), (back, cy - half), (back, cy + half)]
+    if on:
+        d.polygon(pts, fill=1, outline=1)
+    else:
+        d.polygon(pts, fill=0, outline=1)
+
+
+def _d_blinker(d, w, data):
+    """The turn signals: left, right, or both at the two ends of the box.
+
+    Lit exactly when the game's lamp is, so it blinks by itself, and both
+    at once are the hazards. The same bits the board's own GAME page reads.
+    """
+    which = w.opts.get("which", "both")
+    blk = int(_num(data, "blinkers"))
+    half = max(1, (min(w.h, 15) - 1) // 2)
+    cy = w.y + w.h // 2
+    if which in ("left", "both"):
+        _arrow(d, w.x, cy, half, True, blk & 1)
+    if which in ("right", "both"):
+        _arrow(d, w.x + w.w - 1, cy, half, False, blk & 2)
+
+
 def _alarm_parts(w, data):
     """(text, draw it at all). Nothing pending means nothing on the glass -
     except in the editor, where a widget you cannot see is a widget you cannot
@@ -555,7 +587,7 @@ DRAW = {
     # rename, it is a bug.
     "axis": _d_dz, "dz": _d_dz,
     "btn": _d_btn, "btnrow": _d_btnrow, "knob": _d_knob, "disc": _d_disc,
-    "switch": _d_switch, "alarm": _d_alarm,
+    "switch": _d_switch, "alarm": _d_alarm, "blinker": _d_blinker,
 }
 
 # Kinds that pick one of a list rather than a field - a dropdown in the editor.
@@ -563,6 +595,7 @@ CHOICES = {
     "btn": [(n, n) for n in PCF_NAMES + PAD_NAMES],
     "switch": [("sw1", "Switch 1 (3 positions)"),
                ("sw2", "Switch 2 (5 positions)")],
+    "blinker": [("both", "Both sides"), ("left", "Left"), ("right", "Right")],
 }
 
 # The kinds that read two fields, so the editor knows when to offer a second.
@@ -593,6 +626,8 @@ PALETTE = [
     ("switch", "Switch",    dict(w=40, h=10, field="none",
                                  opts={"which": "sw1"})),
     ("alarm", "Alarm in",   dict(w=44, h=11, size=11, field="none")),
+    ("blinker", "Signals",  dict(w=128, h=13, field="none",
+                                 opts={"which": "both"})),
 ]
 
 # One line each, for the shelf. "Lamp" told nobody anything.
@@ -614,6 +649,8 @@ ABOUT = {
     "switch": "a slide switch, with the position it is in filled",
     "alarm": "how long until the next alarm - gone from the panel when there "
              "is none, still here so you can place it",
+    "blinker": "the turn-signal arrows, blinking with the car's own - both "
+               "at once is the hazards",
 }
 
 

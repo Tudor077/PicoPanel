@@ -1970,8 +1970,10 @@ class App(tk.Tk):
             for k in ("speed_kmh", "rpm", "rpm_max", "redline", "gear",
                       "fuel_pct", "throttle", "brake", "turbo_bar", "engine_c",
                       "kts", "vspeed_fpm", "alt_ft", "hdg", "gforce", "aoa",
-                      "src", "text"):
+                      "src", "text", "blinkers"):
                 d[k] = getattr(t, k, None)
+            blk = int(getattr(t, "blinkers", 0) or 0)
+            d["blink_l"], d["blink_r"] = blk & 1, (blk & 2) >> 1
         d.update(self.sticks.read())
         # The panel's own state. It reports all of this five times a second
         # anyway - the board's pages are built out of it, so yours can be too.
