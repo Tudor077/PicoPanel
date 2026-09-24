@@ -564,6 +564,26 @@ It is two images now, made once and written into. That is worth doing on its
 own, and it happens to be the heaviest thing in the program that only runs
 while the window is open, which is the description of the fault.
 
+### Without a panel at all
+
+`fakepanel.py` is the board with no board: it emits the same byte stream, so
+the app connects to it and cannot tell. Pick **EMULATOR** in the port list, or
+run it on its own with `python fakepanel.py --art` to watch the screen as text.
+
+It had fallen a long way behind. It was written when the panel had nine pages
+and none of them were yours, and it never learned about MUSIC, about MINE 1..8,
+or about any of the `%` commands. The one that mattered was `!PAGE`: the board
+says which page and which face is showing, and that is how the app knows which
+picture to send. Without it the app sat at page -1 and your own pages never got
+a frame at all - the emulator connected, reported cheerfully, and showed you
+nothing you had drawn.
+
+It now has the eighteen pages, the rotation, the faces, the pages you draw
+(kept and put on its screen exactly as the board does), the USER button with
+the same walk and the same hold, and the report in the shape the app parses.
+Checked end to end: a page laid out here, rendered, sent, and mirrored back -
+512 of 512 bytes identical.
+
 ## What it costs while you are not looking
 
 Measured on this machine, the app sitting in the tray with the board connected:

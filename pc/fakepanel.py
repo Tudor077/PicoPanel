@@ -70,12 +70,26 @@ FONT = {
     "Y": (0x03, 0x04, 0x78, 0x04, 0x03), "Z": (0x61, 0x51, 0x49, 0x45, 0x43),
 }
 
-# enum Page { P_OVERVIEW = 0, P_GAME, P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C,
-#             P_INFO, P_COUNT };  -- the PG= number is an index into this.
-P_OVERVIEW, P_GAME, P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO = range(9)
-PAGE_NAME = ["PANEL", "GAME", "HID", "SWITCHES", "ENCODER",
-             "BUTTONS", "PCF8574", "I2C", "INFO"]
+# The PG= number is an index into this, and it has to match the firmware's own
+# enum exactly - the app looks pages up by number. MUSIC and the eight pages
+# you draw yourself arrived after this file was first written, which is why it
+# had nine of them and the app could not make sense of anything it said.
+PAGE_NAME = ["PANEL", "GAME", "MUSIC",
+             "MINE 1", "MINE 2", "MINE 3", "MINE 4",
+             "MINE 5", "MINE 6", "MINE 7", "MINE 8",
+             "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO"]
 PAGES = PAGE_NAME                      # kept for anything reading the old name
+(P_OVERVIEW, P_GAME, P_MUSIC, P_CUSTOM1, _C2, _C3, _C4, _C5, _C6, _C7, _C8,
+ P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO) = range(len(PAGE_NAME))
+CUS_FIRST, CUS_SLOTS, CUS_FACES = P_CUSTOM1, 8, 4
+CUS_BYTES = SCREEN_W * SCREEN_H // 8
+MUSIC_SUBS = 2
+
+
+def cus_slot(page):
+    """Which of your own pages that number is, or None."""
+    i = page - CUS_FIRST
+    return i if 0 <= i < CUS_SLOTS else None
 
 # btn[].name in the firmware - two characters, so they fit the 17px boxes.
 BTN_NAMES = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
@@ -163,10 +177,28 @@ class FakePanel:
         self.page = 0
         self.media = False       # layer two, latched by double-tapping USER
         self.game_sub = 0
+        self.music_sub = 0
+        # The rotation, and where we are in it. The app sends this with "%pg"
+        # on every connect; until then it is every page, the way the board
+        # comes up before anyone has told it otherwise.
+        self.page_list = list(range(len(PAGE_NAME)))
+        self.page_slot = 0
+        # Your own pages: the finished picture for each face, how many faces
+        # each has, and which one is showing. The app sends the pictures with
+        # "%cv=<slot>,<face>,<base64>" - the same 512 bytes it sends the board.
+        self.cus = [[None] * CUS_FACES for _ in range(CUS_SLOTS)]
+        self.cus_subs = [1] * CUS_SLOTS
+        self.cus_sub = [0] * CUS_SLOTS
+        self.hid_lock = 0        # pages that hold USER while HID is armed
+        self.aod = 0             # pages that keep the screen lit
+        self.hdr_style = 0
+        self._said_page = None   # what the last !PAGE said, so it is said once
         self._usr_down = False
         self._usr_press_at = 0.0
         self._usr_stage1 = False
         self._usr_last_short = 0.0
+        # What the panel looked like before the last short press - see user_up.
+        self._before = (0, 0, 0, 0, [0] * CUS_SLOTS)
         self.hid = True
         self.mirror = False
         self.game_src = "-"
@@ -200,10 +232,44 @@ class FakePanel:
         return (
             f"SW2={self.sw1} SW3={self.sw2} ENC={self.enc} TOT={self.total}"
             f" BTN={btn} ERR={self.errors} PCF={pcf}"
-            f" PG={self.page} GM={self.game_src} GL={self.game_lines}"
-            f" HID={'1' if self.hid else '0'} OLED=ok"
+            f" PG={self.page}.{self.game_sub}"
+            f" ORD={','.join(str(i) for i in self.page_list)}"
+            f" HL={self._hl_text()}"
+            f" M={'1' if self.media else '0'}"
+            f" KNOB={'vol' if (self.media or self.page == P_MUSIC) else 'pad'}"
+            f" GM={self.game_src} GL={self.game_lines}"
+            f" NP=- AU=-"
+            f" HID={'1' if self.hid else '0'} OLED=ok SLP={self.sleep_state()}"
             f" FPS={60 if up % 20 > 1 else 59} RND=14800us I2C=400k P=16ms"
         )
+
+    def _hl_text(self):
+        held = [str(i) for i in range(len(PAGE_NAME)) if self.hid_lock >> i & 1]
+        return ",".join(held) if held else "-"
+
+    # ---------------------------------------------------------- which face
+    def page_face(self):
+        """(which face is showing, how many this page has) - what !PAGE says."""
+        sl = cus_slot(self.page)
+        if self.page == P_GAME:
+            return self.game_sub, (3 if self.game_src != "-" else 1)
+        if self.page == P_MUSIC:
+            return self.music_sub, MUSIC_SUBS
+        if sl is not None:
+            return self.cus_sub[sl], self.cus_subs[sl]
+        return 0, 1
+
+    def announce_page(self):
+        """The board says where it is on every change, and the app needs it:
+        it is how it knows which of your pages to send a picture for. Said on
+        change rather than in the report, because the report can be switched
+        off and this has to work regardless."""
+        cur, tot = self.page_face()
+        shift = 9 if self.sleep_state() else 0
+        now = (self.page, cur, tot, shift)
+        if now != self._said_page:
+            self._said_page = now
+            self._line("!PAGE %d %d %d %d" % now)
 
     # ------------------------------------------------------------- the screen
     def sleep_state(self):
@@ -225,8 +291,22 @@ class FakePanel:
         """
         s = self.screen
         s.clear()
+        sl = cus_slot(self.page)
+        if sl is not None:
+            # A page of yours arrives as a finished picture and is copied
+            # straight into the screen, header and all - the same memcpy the
+            # firmware does. Nothing else is drawn over it.
+            frame = self.cus[sl][self.cus_sub[sl]]
+            if frame:
+                s.buf[:] = bytearray(frame[:len(s.buf)])
+            else:
+                s.text(0, 13, "no layout yet")
+                s.text(0, 23, "build one in the app")
+            return s
         self._header()
-        if self.page == P_OVERVIEW:
+        if self.page == P_MUSIC:
+            self._draw_music()
+        elif self.page == P_OVERVIEW:
             self._draw_overview()
         elif self.page == P_GAME:
             self._draw_game()
@@ -248,16 +328,35 @@ class FakePanel:
             s.text(0, 23, PAGE_NAME[self.page] + " needs hw")
         return s
 
+    def _draw_music(self):
+        """What is playing, or the fact that nothing is. The real page is built
+        from what the PC sends about the track; the emulator has no media
+        session behind it, so it says so rather than inventing a song."""
+        s = self.screen
+        if self.music_sub == 1:
+            s.text(0, 13, "karaoke is off")
+            s.text(0, 23, "turn it on in the app")
+        else:
+            s.text(0, 13, "nothing playing")
+            s.text(0, 23, "(emulated)")
+
     def _header(self):
         """A filled white bar with black text - inverted, unlike every other page."""
         s = self.screen
         s.rect(0, 0, SCREEN_W, 9, fill=True)
         s.text(2, 1, PAGE_NAME[self.page], color=0)
-        mark = ("HID " if self.hid else "") + ("M " if self.media else "")
-        cur, tot = self.page + 1, len(PAGE_NAME)
-        if self.page == P_GAME and self.game_src != "-":
-            # On GAME the header counts the game's own sub-pages, not the panel's.
-            cur, tot = self.game_sub + 1, 3
+        if self.hid:
+            mark = "LOCK " if self.hid_lock >> self.page & 1 else "HID "
+        else:
+            mark = ""
+        mark += "M " if self.media else ""
+        cur, tot = self.slot_of(self.page) + 1, len(self.page_list)
+        face, faces = self.page_face()
+        if faces > 1:
+            # On a page with faces the header counts those, not the rotation:
+            # while you are walking them, which one you are on is the thing you
+            # cannot otherwise tell.
+            cur, tot = face + 1, faces
         buf = "{}{}/{}".format(mark, cur, tot)
         s.text(SCREEN_W - 2 - 6 * len(buf), 1, buf, color=0)
 
@@ -399,8 +498,14 @@ class FakePanel:
         now = time.monotonic()
         gap = int((now - self._usr_last_short) * 1000) if self._usr_last_short else 0
         if self._usr_last_short and gap < USR_DOUBLE_MS:
-            # Second press: step the page back (the first one moved it on).
-            self.page = (self.page + len(PAGE_NAME) - 1) % len(PAGE_NAME)
+            # Second press: put back whatever the first one moved, and toggle.
+            # It used to step a page back on the assumption that the first
+            # press had stepped one forward - but on a sub-page it had walked
+            # a face instead, so two quick presses left you a page BACK from
+            # where you started. The board had the same fault and lost it the
+            # same way: remember, then restore.
+            (self.page, self.page_slot, self.game_sub, self.music_sub,
+             self.cus_sub) = self._before
             self._usr_last_short = 0.0
             self.media = not self.media
             self._line("[usr] double press at {} ms -> layer = {}".format(
@@ -410,15 +515,138 @@ class FakePanel:
             self._line("[usr] single press, {} ms after the previous one "
                        "(window {})".format(gap, USR_DOUBLE_MS))
         self._usr_last_short = now
-        # Armed and driving: USER walks the game's sub-pages, not the
-        # diagnostic ones. Disarm to get back out.
-        if self.hid and self.game_src != "-":
-            self.page = P_GAME
-            self.game_sub = (self.game_sub + 1) % 3
-            return
-        self.page = (self.page + 1) % len(PAGE_NAME)
+        # Noted BEFORE the press does anything, because it is what the next one
+        # puts back if it comes quickly enough to be half of a double.
+        self._before = (self.page, self.page_slot, self.game_sub,
+                        self.music_sub, list(self.cus_sub))
+        self.short_press()
 
     # ------------------------------------------------------------- the inputs
+    # ------------------------------------------------------------ the walk
+    def slot_of(self, page):
+        """Where a page sits in the rotation, or 0 if it has been left out."""
+        try:
+            return self.page_list.index(page)
+        except ValueError:
+            return 0
+
+    def goto(self, page):
+        if 0 <= page < len(PAGE_NAME):
+            self.page = page
+            self.page_slot = self.slot_of(page)
+
+    def step(self, by=1):
+        if not self.page_list:
+            return
+        self.page_slot = (self.page_slot + by) % len(self.page_list)
+        self.page = self.page_list[self.page_slot]
+
+    def short_press(self):
+        """What USER does: walk the faces of this page, then leave it.
+
+        The order is the firmware's - GAME's own sub-pages while HID is armed,
+        then MUSIC's two, then the faces of a page of yours - and a page that
+        holds HID does not let go until you disarm.
+        """
+        self.poke()
+        if self.hid and self.game_src != "-":
+            self.goto(P_GAME)
+            self.game_sub = (self.game_sub + 1) % 3
+            return
+        self.game_sub = 0
+        if self.page == P_MUSIC and self.music_sub + 1 < MUSIC_SUBS:
+            self.music_sub += 1
+            return
+        self.music_sub = 0
+        sl = cus_slot(self.page)
+        if sl is not None:
+            if self.cus_sub[sl] + 1 < self.cus_subs[sl]:
+                self.cus_sub[sl] += 1
+                return
+            self.cus_sub[sl] = 0
+        if self.hid and self.hid_lock >> self.page & 1:
+            self._line("[usr] this page holds HID - disarm to move on")
+            return
+        self.step(1)
+
+    # --------------------------------------------------------- the % commands
+    def percent(self, text):
+        """The PC's settings line: "%pg=1,2;%rs=0", and the rest.
+
+        Tokens with no "=" carry nothing and are answered first - the same trap
+        the firmware has, where a handler keyed on "key=value" never sees them.
+        """
+        for tok in text.split(";"):
+            tok = tok.strip().lstrip("%")
+            if not tok:
+                continue
+            if "=" not in tok:
+                if tok == "wk":
+                    self.poke()
+                elif tok == "up":
+                    self.short_press()
+                elif tok == "sv":
+                    self._line("[store] saved %d pages in 44 ms"
+                               % len(self.page_list))
+                continue
+            key, _, val = tok.partition("=")
+            key = key.lower()
+            if key == "pg":
+                want = [int(v) for v in val.split(",")
+                        if v.strip().isdigit() and int(v) < len(PAGE_NAME)]
+                if want:
+                    self.page_list = want
+                    self.page_slot = min(self.page_slot, len(want) - 1)
+                    self.page = self.page_list[self.page_slot]
+            elif key == "gp":
+                self.goto(int(val) if val.isdigit() else 0)
+            elif key == "gs":
+                self.game_sub = max(0, min(2, int(val or 0)))
+            elif key == "ms":
+                self.music_sub = max(0, min(MUSIC_SUBS - 1, int(val or 0)))
+            elif key == "cs":
+                sl = cus_slot(self.page)
+                if sl is not None and val.isdigit():
+                    self.cus_sub[sl] = max(0, min(self.cus_subs[sl] - 1,
+                                                  int(val)))
+            elif key == "cn":
+                bits = val.split(",")
+                if len(bits) == 2 and bits[0].isdigit() and bits[1].isdigit():
+                    sl = int(bits[0])
+                    if 0 <= sl < CUS_SLOTS:
+                        self.cus_subs[sl] = max(1, min(CUS_FACES, int(bits[1])))
+                        self.cus_sub[sl] = min(self.cus_sub[sl],
+                                               self.cus_subs[sl] - 1)
+            elif key == "cv":
+                bits = val.split(",", 2)
+                if len(bits) == 3 and bits[0].isdigit() and bits[1].isdigit():
+                    sl, face = int(bits[0]), int(bits[1])
+                    if 0 <= sl < CUS_SLOTS and 0 <= face < CUS_FACES:
+                        try:
+                            raw = base64.b64decode(bits[2])
+                        except Exception:
+                            raw = b""
+                        if raw:
+                            self.cus[sl][face] = raw[:CUS_BYTES]
+            elif key in ("ao", "hl"):
+                mask = 0
+                for v in val.split(","):
+                    if v.strip().isdigit():
+                        mask |= 1 << int(v)
+                if key == "ao":
+                    self.aod = mask
+                else:
+                    self.hid_lock = mask
+            elif key == "hs":
+                self.hdr_style = int(val or 0)
+            elif key == "rs":
+                pass                       # the rev counter's shape: GAME only
+            elif key == "fl":
+                self.poke()
+                self._line("[alarm] %s" % val.partition(",")[2])
+            # %al, %tm, %na, %ic, %au, %ts, %ky and the rest are accepted and
+            # ignored: they change nothing this emulator can show.
+
     def command(self, text):
         """One line from the PC: a command letter, or a '$' telemetry line."""
         text = text.strip()
@@ -429,6 +657,9 @@ class FakePanel:
             for tok in text[1:].split(";"):
                 if tok.startswith("src="):
                     self.game_src = tok[4:] or "-"
+            return
+        if text.startswith("%"):
+            self.percent(text)
             return
         c = text[0]
         self.poke()
@@ -465,6 +696,7 @@ class FakePanel:
         """Produce whatever the board would have sent by now."""
         now = time.monotonic() if now is None else now
         self.user_service()
+        self.announce_page()
         if now >= self._next_demo:
             self._demo_step(now)
         if now >= self._next_report:
