@@ -89,7 +89,7 @@ class Editor(ttk.Frame):
         self._dnd = None            # (kind, defaults) while dragging off the shelf
         self._ghost = None
         self._from = None           # where the pointer was when it was picked up
-        self._moaned = False
+        self._warned = False
         self._photo_ref = None
         self._snap = [False, False]
         self._build()
@@ -554,8 +554,8 @@ class Editor(ttk.Frame):
             # Once, not sixty times a second - but once, because a preview that
             # goes black and says nothing is how a broken _photo() lived here
             # for a whole release.
-            if not self._moaned:
-                self._moaned = True
+            if not self._warned:
+                self._warned = True
                 try:
                     self.app._log("the preview is not drawing: %s" % e, "err")
                 except Exception:

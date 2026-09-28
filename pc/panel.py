@@ -2261,8 +2261,8 @@ class App(tk.Tk):
                     # Once. A page that quietly stops being sent looks exactly
                     # like a page nobody has drawn yet, and the board says so
                     # in good faith: "no layout yet".
-                    if not getattr(self, "_cv_moaned", False):
-                        self._cv_moaned = True
+                    if not getattr(self, "_cv_warned", False):
+                        self._cv_warned = True
                         self.q.put(("err", "the page is not being sent: %s" % e))
 
             self._stop_send.wait(period)
