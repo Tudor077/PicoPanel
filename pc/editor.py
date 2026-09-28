@@ -1,8 +1,19 @@
 """The page editor: take a widget off the shelf, drag it onto the screen.
 
-The preview is not a drawing of what the panel will show - it IS what the panel
-will show. The same `widgets.render` produces the image here and the 512 bytes
-that go down the wire, so the two cannot disagree.
+The preview is not a drawing of what the panel will show - it is made by the
+same `widgets.render` that produces the 512 bytes going down the wire, from the
+same data, so it cannot drift into being a different drawing of the same thing.
+
+It is not identical, and the file used to claim it was. Two differences, both
+on purpose:
+
+  - the preview renders with `_editing` set. A widget that hides itself when it
+    has nothing to say - the alarm countdown, with no alarm pending - draws
+    here and draws nothing there. You cannot place a widget you cannot see.
+  - the grid, the centre lines and the selection box are drawn on the canvas
+    after the image, not into it. They never reach the board.
+
+Anything else is a bug.
 
 Frames are sent only while the board is on that page. It says so itself with
 `!PAGE n` on every change; guessing from the status line would not work, because
@@ -511,21 +522,34 @@ class Editor(ttk.Frame):
             # where you have to be able to see it to place it.
             img = WG.render(self.items, dict(self.app.widget_data(), _editing=1),
                             header=self._head())
-            if img is not None:
-                self._photo_ref = _photo(img)
+            if img is None:
+                # Nothing to draw. What used to happen here was nothing at all:
+                # the branch below was skipped, the canvas kept whatever it had
+                # from last time, and the editor went on showing a page that was
+                # no longer being produced - while frame_bytes handed the board
+                # None. The only way in is PIL being missing, so there would be
+                # no stale frame to leave behind in practice, but a preview that
+                # lies quietly is the one thing this window must never do.
                 self.canvas.delete("all")
-                self.canvas.create_image(0, 0, anchor="nw", image=self._photo_ref)
-                self._centred()
-                self._grid()
-                if self.sel:
-                    w = self.sel
-                    bx, by, ww, hh = self._box_of(w)
-                    if w.kind in WG.AUTO_SIZE:
-                        w.w, w.h = ww, hh      # keep the stored box honest
-                    self.canvas.create_rectangle(
-                        bx * ZOOM, by * ZOOM,
-                        (bx + ww) * ZOOM - 1, (by + hh) * ZOOM - 1,
-                        outline="#e8744f", dash=(3, 2))
+                self.canvas.create_text(
+                    WG.W * ZOOM // 2, WG.H * ZOOM // 2, fill="#e8744f",
+                    text="nothing can be drawn - Pillow is missing")
+                self.after(500, self._tick)
+                return
+            self._photo_ref = _photo(img)
+            self.canvas.delete("all")
+            self.canvas.create_image(0, 0, anchor="nw", image=self._photo_ref)
+            self._centred()
+            self._grid()
+            if self.sel:
+                w = self.sel
+                bx, by, ww, hh = self._box_of(w)
+                if w.kind in WG.AUTO_SIZE:
+                    w.w, w.h = ww, hh          # keep the stored box honest
+                self.canvas.create_rectangle(
+                    bx * ZOOM, by * ZOOM,
+                    (bx + ww) * ZOOM - 1, (by + hh) * ZOOM - 1,
+                    outline="#e8744f", dash=(3, 2))
         except Exception as e:
             # Once, not sixty times a second - but once, because a preview that
             # goes black and says nothing is how a broken _photo() lived here
@@ -573,11 +597,6 @@ class Editor(ttk.Frame):
                                 fill="#e8744f" if self._snap[0] else "#3f6c8c")
         self.canvas.create_line(0, my, CW, my, dash=(5, 4),
                                 fill="#e8744f" if self._snap[1] else "#3f6c8c")
-
-    # -------------------------------------------------------------- output
-    def frame_bytes(self):
-        img = WG.render(self.items, self.app.widget_data(), header=self._head())
-        return None if img is None else WG.to_frame(img)
 
 
 class EditorWindow(tk.Toplevel):
