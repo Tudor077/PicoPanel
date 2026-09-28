@@ -46,50 +46,31 @@ import theme
 
 try:
     from tray import Tray
-except Exception:                 # pywin32 / Pillow missing, or an odd Windows
+except Exception:
     Tray = None
 
 RP2040_VID = 0x2E8A
 BAUD = 115200
-# The board's screen renders at 62 FPS, so there's a point in feeding it that
-# often. On USB CDC the 115200 rate is a fiction - the transfer runs at USB
-# speed, not at the baud rate - so 60 lines a second (~5 KB/s) loads nothing.
 SEND_HZ = 60
 STALE_S = 2.0
 
-# The board's pages, in the order of its own enum - the app talks about them
-# by number, so this list IS the protocol. It had fallen behind: MUSIC was
-# added to the board and not here, so every label after it was one out.
 PAGE_NAMES = ["PANEL", "GAME", "MUSIC",
               "MINE 1", "MINE 2", "MINE 3", "MINE 4",
               "MINE 5", "MINE 6", "MINE 7", "MINE 8",
               "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO"]
-# The board keeps eight pages that the PC draws. They are pages like any other -
-# they sit in the rotation and they can be dragged about - and which of them
-# EXIST is up to you: the app makes one on a button and unmakes it on another,
-# and only the ones you have made appear in the list. Eight is where it stops
-# because each one is a whole frame of the board's RAM.
 CUSTOM_FIRST, CUSTOM_N = 3, 8
-# Faces per page of yours. The board keeps every one of them - 8 x 4 x 512 is
-# 16 KB of its RAM and the same again in the bank it saves to, which is what
-# the save costs in frozen screen. Raising it is not free.
 FACES_MAX = 4
-# The two pages that have faces of their own, by name rather than by number:
-# the numbers move every time the board grows a page, and have.
 P_GAME, P_MUSIC = PAGE_NAMES.index("GAME"), PAGE_NAMES.index("MUSIC")
 P_HID = PAGE_NAMES.index("HID")
 
 PANEL_BTN = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
-# The mirrored screen, drawn this many times larger than the real 128x32 panel.
-# 4x is 512x128 on screen: readable across a desk without taking over the window.
 MIRROR_SCALE = 4
-MIRROR_LIT = "#e6f2ff"        # an OLED's slightly blue white
+MIRROR_LIT = "#e6f2ff"
 MIRROR_DARK = "#0a0c0e"
 PCF_BTN = ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4"]
 
 
-# ---------------------------------------------------------------------
 def parse_telemetry(line):
     """The board's report line -> a dict. None if it isn't a report."""
     if "ENC=" not in line or "BTN=" not in line:
@@ -109,7 +90,7 @@ def parse_telemetry(line):
             return default
 
     return {
-        "sw1": num("SW2"),          # firmware SW2 = the 3-position switch
+        "sw1": num("SW2"),
         "sw2": num("SW3"),
         "enc": num("ENC", 0),
         "tot": num("TOT", 0),
@@ -122,8 +103,6 @@ def parse_telemetry(line):
         "game": out.get("GM"),
         "fps": num("FPS"),
         "oled": out.get("OLED") == "ok",
-        # 0 lit, 1 dimmed, 2 off. The mirrored frame cannot say - that is the
-        # buffer, and the buffer is the same whether the glass is on or not.
         "sleep": num("SLP"),
     }
 
@@ -139,36 +118,23 @@ EMULATOR_PORT = "EMULATOR"
 
 
 def list_ports():
-    # The emulator first, so the app is usable with no board on the desk.
     out = [f"{EMULATOR_PORT}  <- no hardware needed"]
     for p in serial.tools.list_ports.comports():
         out.append(f"{p.device}{'  <- Pico' if p.vid == RP2040_VID else ''}")
     return out
 
 
-# ---------------------------------------------------------------------
 class Link:
     """The serial link. Reading sits on its own thread and posts through the
     queue: Tkinter isn't safe from another thread."""
 
     def __init__(self, q, on_audio=None):
         self.q = q
-        # Which page the board is showing. Kept here rather than posted through
-        # the queue because the sender thread reads it, and the queue is drained
-        # by the window - which runs four times a second when it is in the tray.
         self.board_page = -1
-        # GAME and MUSIC have faces of their own, and GAME's count depends on
-        # what is sending - a tank has less to show than an airliner - so the
-        # board tells us rather than us guessing.
         self.board_sub = 0
-        self.subs_seen = {}         # page -> how many sub-pages it said it has
-        # How far the board's header has slid away, 0 shown to 9 gone. A page
-        # the PC draws covers the whole screen, header included, so without
-        # this its header would be the only one on the panel that never goes.
+        self.subs_seen = {}
         self.board_hdr = 0
-        self.hdr_moved = 0.0        # when it last did
-        # Called straight from the reader thread for '!AUD' lines. It only
-        # enqueues, so the reader is never held up by COM calls.
+        self.hdr_moved = 0.0
         self.on_audio = on_audio
         self.ser = None
         self.thread = None
@@ -183,9 +149,6 @@ class Link:
         self.disconnect()
         try:
             if port == EMULATOR_PORT:
-                # FakeSerial duck-types pyserial, so _reader() below cannot tell
-                # the difference - which is the point: the emulator exercises
-                # the same parsing path the board does.
                 from fakepanel import FakeSerial
                 self.ser = FakeSerial(port, BAUD, timeout=0.2)
             else:
@@ -198,7 +161,7 @@ class Link:
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
         self.q.put(("info", f"connected to {port}"))
-        self.q.put(("settings", None))   # the board forgets: tell it again
+        self.q.put(("settings", None))
         return True
 
     def disconnect(self):
@@ -246,9 +209,6 @@ class Link:
                 if not line:
                     continue
                 if line.startswith("!FB "):
-                    # A frame, not a log line - see mirrorService() in the
-                    # firmware. Decoded here, on the reader thread, so the UI
-                    # thread only ever gets finished bytes.
                     try:
                         _, w, h, b64 = line.split(" ", 3)
                         self.q.put(("fb", (int(w), int(h),
@@ -257,9 +217,6 @@ class Link:
                         pass
                     continue
                 if line.startswith("!PAGE "):
-                    # "!PAGE 1 2 4": page, the face showing, how many it has.
-                    # The older board said only the first number, and that one
-                    # still means the same thing.
                     try:
                         bits = line.split()
                         self.board_page = int(bits[1])
@@ -274,10 +231,6 @@ class Link:
                         pass
                     continue
                 if line.startswith("!AUD "):
-                    # The panel asking for a volume change. Handled off this
-                    # thread - see AudioBridge - and deliberately NOT logged:
-                    # a spin of the knob would fill the window with twenty
-                    # identical lines.
                     try:
                         if self.on_audio:
                             self.on_audio(int(line.split()[1]))
@@ -300,9 +253,9 @@ class Hub:
     def start(self):
         for key, cls in ALL.items():
             if key == "demo":
-                continue                 # only started on request
+                continue
             if key == "outgauge" and self.yield_outgauge:
-                continue                 # the port is left free for somebody else
+                continue
             s = cls()
             s.start()
             self.sources.append(s)
@@ -343,38 +296,25 @@ class Hub:
             s.stop()
 
 
-# ---------------------------------------------------------------------
 class App(tk.Tk):
     def __init__(self, hidden=False):
         super().__init__()
         self.title("PicoPanel")
-        # One look for the whole window - the one the page cards already had.
-        # Two designs in one window is worse than either.
         theme.apply(self)
-        # The taskbar shows the WINDOW's icon, not the executable's - which is
-        # why a perfectly good icon in the .exe still left Tk's default feather
-        # sitting down there. Same drawing as the tray and the exe, written out
-        # because Tk wants a file on disk.
         try:
             import icon as _icon
             _ico = os.path.join(tempfile.gettempdir(), "picopanel_win.ico")
             _icon.save_ico(_ico)
-            self.iconbitmap(default=_ico)       # default: every window we open
-            self.icon_path = _ico               # the editor window wants it too
+            self.iconbitmap(default=_ico)
+            self.icon_path = _ico
         except Exception:
-            pass                                # an icon is never worth a crash
-        # Wide enough for a page card: the picture alone is 256 pixels, and
-        # the whole point of the list is that you see the pages rather than
-        # read their names.
+            pass
         self.geometry("1000x700")
         self.minsize(900, 600)
 
         self.cfg = settings.load()
         self.q = queue.Queue()
 
-        # Per-application volume. The board asks ('!AUD n'), this answers with
-        # the name and level to show ('%au=..'). Created before the link so the
-        # reader thread always has somewhere to hand its requests.
         self.audio = audio.AudioBridge(
             send=lambda line: self.link.send(line, echo=False),
             log=lambda msg: self.q.put(("err", msg)),
@@ -386,13 +326,7 @@ class App(tk.Tk):
         self.audio.mixer.set_use_inapp(bool(self.cfg.get("app_own_volume", True)))
         if self.audio.lyrics:
             self.audio.lyrics.enabled = bool(self.cfg.get("karaoke", False))
-        # A stick, a wheel or a pad, if one is plugged in: the centring
-        # widget's two axes. Polled only when a widget asks - measured at
-        # 4 microseconds for both devices on this machine.
         self.sticks = sticks.Sticks()
-        # The phone's alarms. Yours live on your phone - that is what actually
-        # wakes you - so the panel is told about them rather than asking you to
-        # type them in twice.
         self.phone = phone.Bridge(log=lambda m, t="info": self.q.put((t, m)))
         self.link = Link(self.q, on_audio=self.audio.request)
         self.hub = Hub()
@@ -401,12 +335,12 @@ class App(tk.Tk):
         self.tel_count = 0
         self.tel_time = time.time()
         self.last_send = 0.0
-        self._fb_seq = 0        # frames arrived, so the walk can wait for new ones
-        self._typing = {}       # header text that is still arriving
-        self._save_due = None   # when to hand the board what you have changed
-        self._hdr_pos = None    # where our header bar is, in pixels
+        self._fb_seq = 0
+        self._typing = {}
+        self._save_due = None
+        self._hdr_pos = None
         self._hdr_t = time.time()
-        self.hold_until = 0.0   # don't reconnect before this
+        self.hold_until = 0.0
         self.tray = None
 
         self._stop_send = threading.Event()
@@ -426,19 +360,14 @@ class App(tk.Tk):
         if hidden and self.tray:
             self.withdraw()
         elif hidden:
-            self.iconify()          # no tray, at least minimise it
+            self.iconify()
 
-        # Sending to the board lives on its own thread, NOT in the UI loop. With
-        # the window hidden in the tray that loop only turns 4 times a second so
-        # it doesn't burn CPU for nothing - and it used to drag telemetry along
-        # with it, so the screen got 4 packets a second and looked laggy.
         self._sender = threading.Thread(target=self._send_loop, daemon=True)
         self._sender.start()
 
         self.after(50, self._pump)
         self.after(1000, self._autoconnect)
 
-    # -------------------------------------------------- construction
     def _build(self):
         pad = dict(padx=6, pady=4)
 
@@ -466,7 +395,6 @@ class App(tk.Tk):
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
-        # ---- game telemetry
         g = ttk.LabelFrame(left, text="Game telemetry")
         g.pack(fill="x")
         row = ttk.Frame(g)
@@ -483,7 +411,6 @@ class App(tk.Tk):
         self.game_det = ttk.Label(g, text="", font=("Consolas", 9))
         self.game_det.pack(anchor="w", padx=6, pady=(0, 6))
 
-        # ---- the panel's screen, mirrored
         mf = ttk.LabelFrame(left, text="Panel screen")
         mf.pack(fill="x", pady=(6, 0))
         head = ttk.Frame(mf)
@@ -500,9 +427,8 @@ class App(tk.Tk):
                                        highlightbackground=theme.PAL["line"],
                                        background=theme.PAL["screen"])
         self.mirror_canvas.pack(padx=6, pady=6)
-        self._fb_img = None          # Tk drops an image that nothing references
+        self._fb_img = None
 
-        # ---- panel state
         st = ttk.LabelFrame(left, text="Panel state")
         st.pack(fill="both", expand=True, pady=(6, 0))
         self.lamps_pcf = self._lamp_row(st, "Buttons A / B", PCF_BTN)
@@ -543,19 +469,8 @@ class App(tk.Tk):
         ttk.Button(hid, text="Media layer",
                    command=lambda: self.link.send("y")).pack(side="left", padx=4)
 
-        # ---- commands
-        # There was a column of twelve diagnostic buttons here - rescan the
-        # bus, re-init the screen, pin states, help - and a box to type a
-        # command into. They are the board's own console, one letter each, and
-        # they belong to whoever is debugging the hardware rather than to
-        # anyone using the panel. The board still answers all of them over the
-        # wire; there is simply no longer a wall of buttons in front of them.
-
         self._build_settings()
 
-        # No Widgets tab. It was one page of the eight, permanently open, from
-        # before a page could be opened in its own window - and it invited you
-        # to lay out slot 0 whether or not that page even existed.
         self.tabs.bind("<<NotebookTabChanged>>", self._preview_follow)
 
         logf = ttk.LabelFrame(self, text="Log")
@@ -593,7 +508,6 @@ class App(tk.Tk):
             c.itemconfigure(rect, fill=theme.PAL["ok"] if on
                             else theme.PAL["card"])
 
-    # -------------------------------------------------- tray
     def _start_tray(self):
         if Tray is None:
             self._log("no tray icon (pywin32 or Pillow is missing)", "info")
@@ -628,7 +542,6 @@ class App(tk.Tk):
         self._log("titles: %s" % ("their own alphabet" if on
                                   else "Latin letters, panel font"), "info")
 
-    # ---------------------------------------------------------------- settings
     def _build_settings(self):
         """Everything that is a choice rather than a reading.
 
@@ -640,7 +553,6 @@ class App(tk.Tk):
         self.tabs.add(page, text="Settings")
         pad = dict(padx=8, pady=5)
 
-        # ---- the rotation
         rot = ttk.LabelFrame(page, text="Pages on the panel")
         rot.pack(side="left", fill="both", **pad)
 
@@ -662,10 +574,6 @@ class App(tk.Tk):
                    command=self._preset_del).pack(side="left", padx=2)
         self._preset_refresh()
 
-        # ---- everything else, stacked down the right-hand side, in a column
-        # you can scroll. Side by side, the third panel fell off the edge of
-        # the window; stacked, the bottom one did - and Alarms is the one you
-        # have to scroll to, on a window that is not maximised.
         rest = self._scroller(page, side="left", fill="both", expand=True,
                               **pad)
 
@@ -713,7 +621,6 @@ class App(tk.Tk):
                             value=khz, command=self._apply_i2c).pack(side="left",
                                                                      padx=(0, 10))
 
-        # ---- pages that hold the gamepad
         hl = ttk.LabelFrame(rest, text="Pages that hold HID")
         hl.pack(fill="x", pady=(10, 0))
         ttk.Label(hl, wraplength=320, justify="left", style="Hint.TLabel",
@@ -730,7 +637,6 @@ class App(tk.Tk):
         self.hid_lock_lbl.pack(anchor="w", padx=8, pady=(0, 6))
         self._hid_lock_say()
 
-        # ---- the rest
         opt = ttk.LabelFrame(rest, text="Options")
         opt.pack(fill="x", pady=(10, 0))
         self.auto_var = tk.BooleanVar(value=autostart.is_enabled())
@@ -764,7 +670,6 @@ class App(tk.Tk):
                         variable=self.kar_var,
                         command=self._toggle_karaoke).pack(anchor="w", padx=8, pady=3)
 
-        # ---- alarms
         al = ttk.LabelFrame(rest, text="Alarms")
         al.pack(fill="x", pady=(10, 0))
         ttk.Label(al, wraplength=320, justify="left", style="Hint.TLabel",
@@ -792,7 +697,6 @@ class App(tk.Tk):
                    command=lambda: self._alarm_fire(
                        {"text": self.al_text.get()})).pack(side="right")
 
-        # ---- the phone
         ph = ttk.Frame(al)
         ph.pack(fill="x", padx=8, pady=(2, 6))
         self.phone_var = tk.BooleanVar(value=bool(self.cfg.get("phone_bridge")))
@@ -809,9 +713,6 @@ class App(tk.Tk):
         self._had_alarm = False
         self.after(3000, self._alarm_tick)
 
-        # The wheel, on everything in that column: Tk hands it to the
-        # innermost widget under the pointer, and a column of settings is a
-        # hundred of them.
         self._wheel_all(rest, rest._canvas)
 
         self._pg_load()
@@ -844,8 +745,6 @@ class App(tk.Tk):
         for kid in wdg.winfo_children():
             self._wheel_all(kid, canvas)
 
-    # ---- the page rotation ----------------------------------------------
-    # ---- the pages -------------------------------------------------------
     def page_name(self, pg):
         """What to call it. Yours can be renamed; the board's cannot - those
         names are its own and appear in its header."""
@@ -871,9 +770,9 @@ class App(tk.Tk):
         names = dict(self.cfg.get("page_names") or {})
         name = (name or "").strip()
         if name:
-            names[str(slot)] = name[:16]     # the header is 128 pixels wide
+            names[str(slot)] = name[:16]
         else:
-            names.pop(str(slot), None)       # empty: back to MINE n
+            names.pop(str(slot), None)
         self.cfg["page_names"] = names
         settings.save(self.cfg)
         self.pg_cards.refill()
@@ -918,7 +817,7 @@ class App(tk.Tk):
         self._save_due = None
         if not self.link.open:
             return
-        self.push_pictures()        # which ends with %sv
+        self.push_pictures()
 
     def header_for(self, slot, still=False, face=0):
         """The two strings the header shows: the name, and a counter.
@@ -938,24 +837,11 @@ class App(tk.Tk):
             where = "%d/%d" % (min(face, faces - 1) + 1, faces)
         else:
             where = "%d/%d" % (order.index(pg) + 1, len(order)) if pg in order else ""
-        # The same two words the board puts on its own pages: "HID" while the
-        # gamepad is armed, "LOCK" when this page also holds the USER button.
-        # Drawn here because your pages' headers are drawn here - the board
-        # only ever gets the finished picture, so a mark it adds to its own
-        # header never reached yours.
         if self.hid_armed:
             where = ("LOCK " if self.hid_of(pg) else "HID ") + where
         name = self.page_name(pg)
         badge = self.alarm_badge()
-        # The third number is where the board's own header has slid to, so
-        # yours slides with it and goes away when the panel goes quiet. The
-        # fourth is the countdown, which does NOT go away with it: the board
-        # keeps showing it on its own pages too.
         if still:
-            # The picture that gets kept: header down, no countdown, and no HID
-            # mark either. Both are states of the moment, and a picture that
-            # outlives the moment should not still be claiming them - a panel
-            # on a charger saying LOCK with no gamepad anywhere is a lie.
             if faces > 1:
                 plain = "%d/%d" % (min(face, faces - 1) + 1, faces)
             else:
@@ -967,10 +853,6 @@ class App(tk.Tk):
         style = self.cfg.get("anim_style", "classic")
         if p < 1.0 and style != "none":
             if style == "classic":
-                # Down from the top, which is how the header comes back on
-                # every other page. Clamped to 8 so the bar is always the
-                # thing on screen, rather than blinking through the state
-                # where it does not exist at all.
                 if shift < WG.HEADER_H:
                     shift = max(shift, min(8, int(round(9 * (1 - p)))))
             elif style == "wipe":
@@ -980,12 +862,7 @@ class App(tk.Tk):
                 name, badge = cut(name), cut(badge)
         return (name, where, shift, badge, reveal)
 
-    # How long it takes to arrive. The board slides its own header the nine
-    # pixels in about this long, and two things moving at two speeds on one
-    # screen would look like two machines.
     ANIM_S = 0.25
-    # One pixel per this long, which is the board's own rate: nine pixels in a
-    # quarter of a second.
     SLIDE_S = 0.025
 
     def _hdr_shift(self):
@@ -1000,11 +877,6 @@ class App(tk.Tk):
         matters is that ours moves smoothly.
         """
         now = time.time()
-        # The board's number is a STATE, not a position to copy: gone, or
-        # here. The nine pixels in between are ours to walk, in our own time.
-        # Copying its position meant copying it over a wire while it was
-        # already moving, and arriving in jerks. Nobody sees the board's own
-        # bar on this page in any case - the whole screen is ours.
         target = 9.0 if self.link.board_hdr >= WG.HEADER_H else 0.0
         pos, then = self._hdr_pos, self._hdr_t
         self._hdr_t = now
@@ -1044,10 +916,6 @@ class App(tk.Tk):
         st = self._typing.get(slot)
         now = time.time()
         if st is None or st[0] != content:
-            # A name changes on every keystroke. Restarting the slide each
-            # time would leave the bar hovering a pixel below the top for as
-            # long as you kept typing, so a run of changes rides the animation
-            # that is already playing.
             t0 = now if (st is None or now - st[1] >= self.ANIM_S) else st[1]
             self._typing[slot] = st = (content, t0)
         return min(1.0, (now - st[1]) / self.ANIM_S)
@@ -1106,7 +974,7 @@ class App(tk.Tk):
         """Throw a page of yours away, and its layout with it."""
         slot = self.slot_of(pg)
         if slot is None:
-            return                # the board's own pages are not ours to delete
+            return
         if self.layout_of(slot):
             from tkinter import messagebox
             if not messagebox.askyesno(
@@ -1124,7 +992,7 @@ class App(tk.Tk):
         for key in ("layouts", "page_names", "page_headers", "custom_subs"):
             d = dict(self.cfg.get(key) or {})
             d.pop(str(slot), None)
-            for f in range(1, FACES_MAX):       # and every face of it
+            for f in range(1, FACES_MAX):
                 d.pop("%d.%d" % (slot, f), None)
             self.cfg[key] = d
         settings.save(self.cfg)
@@ -1137,9 +1005,6 @@ class App(tk.Tk):
         self.pg_cards.refill()
         self.pg_apply()
 
-    # The key a face's layout is filed under. Face 0 keeps the bare slot
-    # number it has always had, so every settings file written before pages
-    # had faces reads back with its layouts exactly where they were.
     @staticmethod
     def _lay_key(slot, face=0):
         return str(slot) if not face else "%d.%d" % (slot, face)
@@ -1155,7 +1020,6 @@ class App(tk.Tk):
         settings.save(self.cfg)
         self.keep_page(slot, face)
 
-    # ---- faces of your own pages -----------------------------------------
     def faces_of(self, slot):
         """How many faces one of your pages has. One, unless you added some."""
         v = (self.cfg.get("custom_subs") or {}).get(str(slot))
@@ -1188,14 +1052,14 @@ class App(tk.Tk):
             self._log("%d faces is as many as a page takes" % FACES_MAX, "err")
             return
         self.set_faces(slot, n + 1)
-        self.pg_open(pg, n)          # straight into the one you just made
+        self.pg_open(pg, n)
 
     def face_del(self, pg, face):
         """Throw a face away. The ones after it shuffle down, layouts and all -
         leaving a hole would mean face 2 of 2 being the third one."""
         slot = self.slot_of(pg)
         if slot is None or face < 1:
-            return                   # face 0 is the page; deleting it is delete
+            return
         n = self.faces_of(slot)
         if face >= n:
             return
@@ -1251,10 +1115,6 @@ class App(tk.Tk):
             return
         key = "gs" if pg == P_GAME else ("ms" if pg == P_MUSIC else None)
         if key:
-            # Always, including face 0. The board keeps whichever face it was
-            # left on, so "show me GAME" with no sub said left it wherever it
-            # happened to be - and the walk then waited two seconds for a page
-            # it had never actually asked for.
             self.link.send("%%%s=%d" % (key, sub), echo=False)
 
     def pg_open(self, pg, face=0):
@@ -1279,13 +1139,13 @@ class App(tk.Tk):
             title = "%s - %d of %d" % (title, face + 1, self.faces_of(slot))
         self._edit_wins[(slot, face)] = editor.EditorWindow(self, slot, title,
                                                             face=face)
-        self.pg_show(pg, face)    # and show it, so you can see what you draw
+        self.pg_show(pg, face)
 
     def pg_toggle(self, pg):
         order, rest = self._pg_ids
         if pg in order:
             if len(order) < 2:
-                return            # never leave the panel with nothing to show
+                return
             order.remove(pg)
             rest.append(pg)
         else:
@@ -1315,7 +1175,6 @@ class App(tk.Tk):
         if order:
             self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
 
-    # ---- alarms ----------------------------------------------------------
     def next_alarm(self):
         """(seconds from now, what for) for the soonest alarm, or None.
 
@@ -1336,7 +1195,7 @@ class App(tk.Tk):
                                 hh, mm, 0, 0, 0, -1))
             left = when - time.time()
             if left < -60:
-                left += 86400            # it has gone today; it is tomorrow's
+                left += 86400
             if best is None or left < best[0]:
                 best = (max(0.0, left), a.get("text", ""))
         p = self.phone.pending()
@@ -1471,9 +1330,6 @@ class App(tk.Tk):
         that, and a screen flashing every three seconds for a minute is not
         what anybody meant.
         """
-        # The board counts down in its own header, on every page - so it is
-        # told how long is left, rather than having to be on the right page to
-        # show it. Every few seconds is plenty: it counts the rest off itself.
         try:
             nxt = self.next_alarm()
             if self.link.open:
@@ -1489,19 +1345,10 @@ class App(tk.Tk):
             self._log("could not tell the board about the alarm: %s" % e, "err")
 
         try:
-            # The phone's, when it comes due. Once - the bridge forgets it as
-            # soon as it has been rung, so it cannot fire twice.
             p = self.phone.pending()
             if p and p[0] <= 1.0:
                 self._alarm_fire({"text": p[1] or "PHONE"})
                 self.phone.clear()
-            # The list the board holds is rung by the board - it does that
-            # whether this app is running or not, and two things ringing the
-            # same alarm would flash twice. What is left here is the phone's,
-            # which only this end knows about.
-            #
-            # The clock goes out every few minutes, because the board counts
-            # off its own crystal from the last time it was told.
             if time.time() - getattr(self, "_clock_at", 0) > 300:
                 self._clock_at = time.time()
                 self.push_clock()
@@ -1509,7 +1356,6 @@ class App(tk.Tk):
             self._log("alarm check failed: %s" % e, "err")
         self.after(3000, self._alarm_tick)
 
-    # ---- presets ---------------------------------------------------------
     def _presets(self):
         p = self.cfg.get("page_presets")
         return p if isinstance(p, dict) else {}
@@ -1552,7 +1398,6 @@ class App(tk.Tk):
             settings.save(self.cfg)
             self._preset_refresh()
 
-    # ---- collecting the pictures -----------------------------------------
     def collect_shots(self, done):
         """Walk every page, photograph it, put the panel back.
 
@@ -1628,7 +1473,7 @@ class App(tk.Tk):
             self._shot_grab(pg, sb)
         elif time.time() > self._shot_until:
             self._shot_late += 1
-            self._shot_grab(pg, sb, late=True)   # no picture rather than a lie
+            self._shot_grab(pg, sb, late=True)
         else:
             self.after(20, self._shot_wait)
 
@@ -1644,15 +1489,12 @@ class App(tk.Tk):
             self._shot_done((pg, sb), photo)
         except Exception:
             pass
-        # Now that we have been there, the board has told us how many faces
-        # that page has - so the rest of them go on the queue next, in place.
         if sb == 0:
             more = self.subs_of(pg)
             if more > 1:
                 self._shot_queue[:0] = [(pg, i) for i in range(1, more)]
         self.after(30, self._shot_step)
 
-    # ---- the screen ------------------------------------------------------
     def _apply_rpm(self):
         v = int(self.rpm_var.get())
         self.cfg["rpm_style"] = v
@@ -1664,15 +1506,11 @@ class App(tk.Tk):
     def _apply_anim(self):
         self.cfg["anim_style"] = self.anim_var.get()
         settings.save(self.cfg)
-        self._typing = {}          # so the next frame plays it the new way
-        # The board draws its own pages' headers, so it needs the style too -
-        # a global setting that only reached the pages the PC draws is a
-        # setting that does nothing, which is exactly how it looked.
+        self._typing = {}
         self.link.send("%%hs=%d" % self.ANIM_CODE.get(self.anim_var.get(), 0),
                        echo=False)
-        self.wake_panel()          # so you can see what you just picked
+        self.wake_panel()
 
-    # ---- pages that stay lit ---------------------------------------------
     def aod_pages(self):
         v = self.cfg.get("aod_pages")
         return [int(i) for i in v if isinstance(i, int)] if isinstance(v, list) else []
@@ -1698,9 +1536,6 @@ class App(tk.Tk):
         self._apply_aod()
         self.pg_cards.refill()
 
-    # Whether the gamepad is armed, as of the last report from the board. Not
-    # something the app decides - it is the board's state and the button on the
-    # panel changes it too - so it is read, never set.
     hid_armed = False
 
     def hid_pages(self):
@@ -1806,7 +1641,7 @@ class App(tk.Tk):
         if order:
             self.link.send("%pg=" + ",".join(str(i) for i in order), echo=False)
         self.link.send("%%rs=%d" % int(self.cfg.get("rpm_style", 0)), echo=False)
-        self._had_alarm = False     # so the next tick tells it either way
+        self._had_alarm = False
         self.link.send("%%ic=%d" % int(self.cfg.get("i2c_khz", 400)), echo=False)
         self.link.send("%%hs=%d" % self.ANIM_CODE.get(
             self.cfg.get("anim_style", "classic"), 0), echo=False)
@@ -1814,9 +1649,6 @@ class App(tk.Tk):
         self._apply_hid()
         self._apply_faces()
         self.push_alarms()
-        # After the page list, so the board knows which pages the pictures are
-        # for; a moment later, so the connect itself is not held up by six
-        # kilobytes of base64.
         self.after(1500, self.push_pictures)
 
     def _toggle_karaoke(self):
@@ -1852,7 +1684,6 @@ class App(tk.Tk):
     def save_cfg(self):
         settings.save(self.cfg)
 
-    # ---- settings, in and out --------------------------------------------
     def _export_cfg(self):
         """Write the whole thing to a file you choose.
 
@@ -1937,9 +1768,6 @@ class App(tk.Tk):
             return True
         slot = self.slot_of(pg)
         if slot is not None:
-            # Every face of it, not the one showing: USER walks to the next one
-            # without warning, and a track widget that has to wake the media
-            # session up first would show the previous song for a second.
             for face in range(self.faces_of(slot)):
                 for d in self.layout_of(slot, face):
                     if str(d.get("field", "")).startswith("np_"):
@@ -1965,8 +1793,6 @@ class App(tk.Tk):
             blk = int(getattr(t, "blinkers", 0) or 0)
             d["blink_l"], d["blink_r"] = blk & 1, (blk & 2) >> 1
         d.update(self.sticks.read())
-        # The panel's own state. It reports all of this five times a second
-        # anyway - the board's pages are built out of it, so yours can be too.
         nxt = self.next_alarm()
         d["alarm_in"] = nxt[0] if nxt else None
         d["alarm_text"] = nxt[1] if nxt else ""
@@ -2005,9 +1831,6 @@ class App(tk.Tk):
 
     def _quit(self):
         self._stop_send.set()
-        # The last thing the panel is left with. It saves by itself three
-        # seconds after the app goes quiet, but by then this process is gone
-        # and whatever was half-drawn is what it would have kept.
         try:
             self.push_pictures()
         except Exception:
@@ -2020,7 +1843,6 @@ class App(tk.Tk):
             self.tray.stop()
         self.destroy()
 
-    # -------------------------------------------------- actions
     def _refresh_ports(self):
         ports = list_ports()
         self.port_box["values"] = ports
@@ -2104,7 +1926,6 @@ class App(tk.Tk):
         self.log.see("end")
         self.log.configure(state="disabled")
 
-    # -------------------------------------------------- loop
     def _pump(self):
         """One turn of the interface, and then the next one - whatever happens.
 
@@ -2144,9 +1965,6 @@ class App(tk.Tk):
 
     def _turn(self):
         self._keep_service()
-        # Frames are coalesced: at 20 a second several can pile up between two
-        # turns of this loop, and drawing the ones already superseded would cost
-        # 4 ms each to produce a picture nobody ever sees.
         frame = None
         try:
             while True:
@@ -2176,9 +1994,6 @@ class App(tk.Tk):
                     self.auto_var.set(payload)
                     self._toggle_autostart()
                 elif kind == "release":
-                    # The serial port is exclusive: while we hold it, not even
-                    # arduino-cli can send the 1200-baud reset that puts the
-                    # board into its bootloader. We let it go for a minute.
                     self.hold_until = time.time() + 60
                     self.link.disconnect()
                     self._set_connected(False)
@@ -2203,8 +2018,6 @@ class App(tk.Tk):
             self.tel_time = now
             self._update_tip()
 
-        # and _pump schedules the next turn, whether this one went well or not
-
     def _send_loop(self):
         """The only place that sends telemetry. Its own rate, independent of how
         often the window redraws - which matters here, because the window runs
@@ -2218,17 +2031,9 @@ class App(tk.Tk):
                 if self.link.send(tel.to_line(), echo=False):
                     self.hub.sent += 1
 
-            # Whichever of your pages is showing, and only while it is. The
-            # picture is rendered from the stored layout rather than from an
-            # editor window: the page has to work with every window closed.
             now = time.time()
             slot = self.slot_of(self.link.board_page) if self.link.open else None
             face = self.link.board_sub if slot is not None else 0
-            # Decided NOW, not when the last frame went out: the header starts
-            # moving between frames, and a rate chosen 66 ms ago would hold the
-            # next one back until the animation was half over. Fast while it
-            # moves, ordinary while it sits - a frame is 684 characters and
-            # there is no sense sending fifty a second at a still picture.
             period_now = (1.0 / 50) if self.header_busy() else page_period
             if slot is not None and now - next_page >= period_now:
                 next_page = now
@@ -2242,9 +2047,6 @@ class App(tk.Tk):
                         self.link.send("%%cv=%d,%d,%s" % (slot, face, b),
                                        echo=False)
                 except Exception as e:
-                    # Once. A page that quietly stops being sent looks exactly
-                    # like a page nobody has drawn yet, and the board says so
-                    # in good faith: "no layout yet".
                     if not getattr(self, "_cv_warned", False):
                         self._cv_warned = True
                         self.q.put(("err", "the page is not being sent: %s" % e))
@@ -2304,11 +2106,6 @@ class App(tk.Tk):
                 MIRROR_LIT if data[base + x] & bit else MIRROR_DARK
                 for x in range(w)) + "}")
 
-        # Two images, made once and written into ever after. It used to build
-        # both of them per frame and drop both - forty Tk images a second
-        # created and destroyed, for a picture that changes in place perfectly
-        # well. The canvas item is created once too, and follows the image it
-        # was given without being told.
         small = getattr(self, "_fb_small", None)
         if small is None or small.width() != w or small.height() != h:
             small = self._fb_small = tk.PhotoImage(width=w, height=h)
@@ -2320,20 +2117,13 @@ class App(tk.Tk):
             self.mirror_canvas.create_image(0, 0, image=big, anchor="nw")
         small.put(" ".join(rows))
         big = self._fb_img
-        # Tcl's own "copy -zoom", which writes into the destination instead of
-        # handing back a new image the way PhotoImage.zoom() does.
         big.tk.call(str(big), "copy", str(small), "-zoom",
                     MIRROR_SCALE, MIRROR_SCALE)
 
-        # Kept for the page cards: they are photographed by driving the board
-        # from page to page. The counter is how the walk knows a frame is one
-        # drawn AFTER the page changed rather than the one already in flight.
         self._last_fb = (w, h, data)
         self._fb_seq = getattr(self, "_fb_seq", 0) + 1
 
         if not self.mirror_var.get():
-            # Frames arrived without us asking - the board was already mirroring
-            # (someone typed 'o' on it). Follow what's actually happening.
             self.mirror_var.set(True)
         self.mirror_lbl.configure(text=f"{w}x{h} live",
                                   foreground=theme.PAL["ok"])
@@ -2425,17 +2215,9 @@ def crash_log(*exc):
 
 
 if __name__ == "__main__":
-    # The serial port is exclusive: a second copy can only sit there failing to
-    # open it. Clicking the shortcut again now raises the one that IS running.
     if not single.claim():
         single.wake_the_other()
         sys.exit(0)
-    # Tcl and Tk are C libraries, and when they go down they take the process
-    # with them without raising anything Python can catch - which is what has
-    # been happening: Windows records an access violation in tk86t.dll and the
-    # window simply disappears. faulthandler writes the Python stack of every
-    # thread at the moment of the fault, which is the only way to see which of
-    # them was in Tk when it went.
     try:
         import faulthandler
         _fault = open(os.path.join(os.path.dirname(settings._path()),

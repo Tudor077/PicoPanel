@@ -8,16 +8,11 @@ the firmware expects.
 import time
 from dataclasses import dataclass, field
 
-# The screen uses the GFX library's ASCII font. Letters that have a Latin form
-# get one - Krakow rather than Krakw - and the rest goes. See text.py; the same
-# code does the track titles, where deleting instead of transliterating left a
-# Russian title empty and the page claimed nothing was playing.
 from .text import clean as _text_clean
 
-MAX_LINE = 200          # the firmware's buffer is 224; leave room.
-                        # A full aircraft line goes past 170.
-MAX_TEXT = 25           # gameTxt[26] on the board
-MAX_SRC = 11            # gameSrc[12]
+MAX_LINE = 200
+MAX_TEXT = 25
+MAX_SRC = 11
 
 
 def _clean(s, limit):
@@ -32,45 +27,33 @@ class Telemetry:
     src: str = ""
     speed_kmh: float = 0.0
     rpm: float = 0.0
-    rpm_max: float = 0.0        # the tacho's full-scale end
-    redline: float = 0.0        # the limiter; 0 = not learned yet
-    gear: int = 0               # 0 = neutral, negative = reverse
-    fuel_pct: float = -1.0      # -1 = unknown
-    throttle: float = 0.0       # 0..1
-    brake: float = 0.0          # 0..1
+    rpm_max: float = 0.0
+    redline: float = 0.0
+    gear: int = 0
+    fuel_pct: float = -1.0
+    throttle: float = 0.0
+    brake: float = 0.0
     turbo_bar: float = 0.0
-    engine_c: float = 0.0       # coolant temperature
+    engine_c: float = 0.0
     alt_m: float = 0.0
     text: str = ""
 
-    # Which PAGE SET the board draws. Not the game's name: a new sim only has
-    # to send the right kind, and needs no firmware change.
-    #
-    #   car    a road vehicle       air    an aircraft with radios and autopilot
-    #   wtair  a War Thunder plane  wtgnd  a War Thunder ground vehicle
-    #
-    # War Thunder earns its own two because it has no radios, transponder or
-    # autopilot at all, and does have G, angle of attack and a crew roster.
-    # Sharing the aircraft pages left half of them permanently blank.
     kind: str = "car"
 
-    # cars
-    blinkers: int = 0           # bit0 = left, bit1 = right (3 = hazards)
+    blinkers: int = 0
 
-    # aircraft
-    kts: float = 0.0            # indicated airspeed, knots
-    vspeed_fpm: float = 0.0     # vertical speed, feet/minute
+    kts: float = 0.0
+    vspeed_fpm: float = 0.0
     alt_ft: float = 0.0
     hdg: float = 0.0
     com1: str = ""
     com2: str = ""
     squawk: str = ""
-    ap_text: str = ""           # autopilot modes, already formatted
+    ap_text: str = ""
 
-    # War Thunder
     gforce: float = 0.0
     aoa: float = 0.0
-    crew: str = ""              # "4/5" - alive out of total
+    crew: str = ""
 
     stamp: float = field(default_factory=time.time)
 
@@ -107,13 +90,11 @@ class Telemetry:
             parts.append(f"aft={int(round(self.alt_ft))}")
             if self.hdg:
                 parts.append(f"hdg={int(round(self.hdg))}")
-            # x10 so the board never has to format a float
             parts.append(f"g={int(round(self.gforce * 10))}")
             parts.append(f"aoa={int(round(self.aoa))}")
         elif self.kind == "car":
             parts.append(f"blk={int(self.blinkers)}")
             if self.turbo_bar:
-                # x10: no floating point on the board for a number we display
                 parts.append(f"tur={int(round(self.turbo_bar * 10))}")
         else:
             parts.append(f"kts={int(round(self.kts))}")
@@ -134,9 +115,6 @@ class Telemetry:
 
         line = "$" + ";".join(parts)
         if len(line) > MAX_LINE:
-            # drop the free text first, then the rest if it still doesn't fit.
-            # Better a shortened line than one the board cuts mid-field and
-            # misreads.
             parts = [p for p in parts if not p.startswith("txt=")]
             line = "$" + ";".join(parts)
             line = line[:MAX_LINE]

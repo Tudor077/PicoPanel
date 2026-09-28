@@ -31,8 +31,6 @@ API = "https://lrclib.net/api/get"
 UA = "PicoPanel (https://github.com/Tudor077/PicoPanel)"
 TIMEOUT = 6.0
 
-# A track with no lyrics must not be asked about again every time it comes
-# round. A track that failed for some other reason is worth one more try later.
 MISS_S = 3600.0
 ERROR_S = 60.0
 
@@ -51,7 +49,7 @@ def parse_lrc(text):
         if not stamps:
             continue
         words = raw[stamps[-1].end():].strip()
-        for m in stamps:                    # one line can carry several times
+        for m in stamps:
             mins = int(m.group(1))
             secs = float(m.group(2).replace(":", "."))
             out.append((mins * 60 + secs, words))
@@ -84,14 +82,12 @@ class Lyrics:
         self.enabled = enabled
         self.status = ""
         self._lock = threading.Lock()
-        self._cache = {}        # key -> [(t, line)] or None for "none exist"
-        self._when = {}         # key -> when that answer was recorded
+        self._cache = {}
+        self._when = {}
         self._busy = set()
 
     @staticmethod
     def _key(artist, title, dur):
-        # A tuple, not a joined string: no separator to pick, and nothing to go
-        # wrong if a title contains whatever that separator was.
         return ((artist or "").strip().lower(),
                 (title or "").strip().lower(),
                 int(dur or 0))
@@ -134,7 +130,7 @@ class Lyrics:
             self.status = ("%d lines for %s" % (len(lines), title) if lines
                            else "no synced lyrics for %s" % title)
         except urllib.error.HTTPError as e:
-            ok = (e.code == 404)            # 404 means "we don't have it"
+            ok = (e.code == 404)
             self.status = ("no lyrics for %s" % title if ok
                            else "lrclib said %s" % e.code)
         except Exception as e:

@@ -18,14 +18,8 @@ import ctypes
 import ctypes.wintypes as wt
 import time
 
-# A hair over one frame of the 15 Hz page sender, so a burst of calls inside
-# one frame costs one poll. Each poll is a few microseconds anyway - this is
-# to keep it that way when a page has four of these on it.
 CACHE_S = 0.05
 
-# How far from the middle counts as moved, on a -1..+1 axis. Sticks rest a
-# pixel or two off centre and jitter there; this is well under any deadzone
-# worth drawing.
 MOVED = 0.02
 
 JOYERR_NOERROR = 0
@@ -67,16 +61,15 @@ class Sticks:
         try:
             self.mm = ctypes.WinDLL("winmm")
         except OSError:
-            self.mm = None          # not Windows, or no winmm: no axes, no fuss
-        self.caps = {}              # id -> JOYCAPS, for the axis ranges
+            self.mm = None
+        self.caps = {}
         self._scanned = 0.0
-        self._last = {}             # id -> the axes we saw last time
-        self._moved = {}            # id -> when it last actually moved
+        self._last = {}
+        self._moved = {}
         self._at = 0.0
         self._out = {"joy_x": 0.0, "joy_y": 0.0, "joy_z": 0.0, "joy_r": 0.0,
                      "joy_id": None}
 
-    # ------------------------------------------------------------------ scan
     def _scan(self, now):
         """Which sticks exist. Re-asked every few seconds: one can be plugged
         in while the app is running, and it should simply start working."""
@@ -93,11 +86,10 @@ class Sticks:
             info.dwSize = ctypes.sizeof(info)
             info.dwFlags = JOY_RETURNALL
             if self.mm.joyGetPosEx(i, ctypes.byref(info)) != JOYERR_NOERROR:
-                continue            # a slot with a driver but nothing in it
+                continue
             found[i] = caps
         self.caps = found
 
-    # ------------------------------------------------------------------ read
     def read(self):
         """The chosen stick's axes, as a dict to fold into the widget data."""
         now = time.time()

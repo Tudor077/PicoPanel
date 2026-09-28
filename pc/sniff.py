@@ -19,7 +19,7 @@ import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 4444
 FMT = "<I4sHBBfffffffIIfff16s16s"
-SIZE = struct.calcsize(FMT)          # 92
+SIZE = struct.calcsize(FMT)
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 try:

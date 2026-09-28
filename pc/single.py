@@ -22,7 +22,7 @@ def claim():
         import win32event
         import winerror
     except Exception:                               # pragma: no cover
-        return True                                 # can't tell: carry on
+        return True
     try:
         _handle = win32event.CreateMutex(None, False, NAME)
         import win32api

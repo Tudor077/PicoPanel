@@ -39,59 +39,39 @@ def main():
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean",
         "--onefile",
-        "--windowed",                 # no console: it's a tray app
+        "--windowed",
         "--name", NAME,
         "--icon", icon,
         "--workpath", os.path.join(tmp, "work"),
         "--distpath", os.path.join(tmp, "dist"),
         "--specpath", tmp,
-        # Imports static analysis can't see: win32com.client is only loaded
-        # inside autostart.enable(), and the Windows serial backend is picked
-        # at runtime from the platform name.
         "--hidden-import", "win32com.client",
         "--hidden-import", "serial.tools.list_ports",
         "--hidden-import", "serial.serialwin32",
-        # Imported inside Link.connect(), only when you pick the emulator
-        # port. Named explicitly so the exe can never ship without it.
         "--hidden-import", "fakepanel",
-        # Per-application volume. pycaw reaches the mixer through COM
-        # interfaces that comtypes builds at run time, so static analysis sees
-        # nothing; without these the exe starts and silently has no audio.
         "--hidden-import", "audio",
         "--hidden-import", "pycaw.pycaw",
         "--hidden-import", "comtypes.gen",
         "--hidden-import", "psutil",
         "--hidden-import", "win32gui",
         "--hidden-import", "win32process",
-        # What's playing comes from the Windows media sessions, through the
-        # winrt projection - also built at run time, also invisible to static
-        # analysis.
         "--hidden-import", "nowplaying",
         "--hidden-import", "winrt.windows.media.control",
         "--hidden-import", "winrt.windows.foundation",
         "--hidden-import", "winrt.system",
         "--hidden-import", "telemetry.text",
-        # Titles are drawn here with a real font and sent as pixels, which is
-        # how Cyrillic reaches a panel whose own font is ASCII.
         "--hidden-import", "textstrip",
         "--hidden-import", "icon",
-        # Synced lyrics for the karaoke page.
         "--hidden-import", "lyrics",
-        # The widget library and its editor.
         "--hidden-import", "widgets",
         "--hidden-import", "editor",
         "--hidden-import", "single",
         "--hidden-import", "theme",
         "--hidden-import", "pagelist",
-        # The joystick axes, read through winmm with ctypes.
         "--hidden-import", "sticks",
-        # The phone bridge: a small HTTP server for the phone's alarms.
         "--hidden-import", "phone",
         "--hidden-import", "PIL.ImageFont",
         "--hidden-import", "PIL.ImageDraw",
-        # UI Automation, for an app's own volume slider. comtypes builds the
-        # wrapper at run time into a writable cache, which works frozen too -
-        # verified - but the import itself is still invisible to the analyser.
         "--hidden-import", "appvolume",
         "--hidden-import", "comtypes.client",
         os.path.join(HERE, "panel.py"),

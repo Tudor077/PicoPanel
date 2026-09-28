@@ -29,8 +29,8 @@ from telemetry.sources import ALL
 
 RP2040_VID = 0x2E8A
 BAUD = 115200
-SEND_HZ = 10             # past this you gain nothing: the screen runs at 30 FPS
-STALE_S = 2.0            # a source older than this no longer counts
+SEND_HZ = 10
+STALE_S = 2.0
 
 
 def find_pico():
@@ -113,8 +113,6 @@ def main():
         elif key == "http":
             s = cls(port=args.http_port)
         elif key == "ets2":
-            # The source now takes host/port so it can keep one connection
-            # alive; the --ets2-url flag is split here to stay compatible.
             from urllib.parse import urlparse
             u = urlparse(args.ets2_url)
             s = cls(host=u.hostname or 'localhost', port=u.port or 25555,
@@ -125,15 +123,12 @@ def main():
         sources.append(s)
 
     print("sources started:")
-    time.sleep(1.0)   # give the threads a moment to report
+    time.sleep(1.0)
     for s in sources:
         print(f"  {s.name:<9} {s.status}")
     print("\nCtrl+C to stop.\n")
 
     board = Board(args.port, dry=args.dry)
-    # Open the port NOW, not on the first telemetry packet. Otherwise, with no
-    # game running, the hub sat silent and you couldn't even tell whether it had
-    # found the board - it looked broken when it simply had nothing to send.
     if not args.dry:
         board.next_try = 0.0
         board.connect()
@@ -147,8 +142,6 @@ def main():
 
     try:
         while True:
-            # the freshest source wins; that's how you change games without
-            # touching anything here
             best = None
             for s in sources:
                 tel = s.latest()

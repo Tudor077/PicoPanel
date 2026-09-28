@@ -49,7 +49,6 @@ class Tray(threading.Thread):
         self._ready = threading.Event()
         self._icon_path = _make_icon()
 
-    # ---------------------------------------------------------------- public
     def set_tip(self, text):
         """The hover text. We use it so the state is visible without opening
         the window."""
@@ -70,7 +69,6 @@ class Tray(threading.Thread):
             except win32gui.error:
                 pass
 
-    # ---------------------------------------------------------------- internal
     def _notify(self, msg):
         hicon = win32gui.LoadImage(0, self._icon_path, win32con.IMAGE_ICON,
                                    0, 0, win32con.LR_LOADFROMFILE)
@@ -96,8 +94,6 @@ class Tray(threading.Thread):
         win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
         win32gui.AppendMenu(m, win32con.MF_STRING, MENU_QUIT, "Quit")
         x, y = win32gui.GetCursorPos()
-        # Without SetForegroundWindow the menu stays open after you click
-        # elsewhere - that's TrackPopupMenu's documented behaviour.
         win32gui.SetForegroundWindow(self.hwnd)
         win32gui.TrackPopupMenu(m, win32con.TPM_LEFTALIGN, x, y, 0, self.hwnd, None)
         win32gui.PostMessage(self.hwnd, win32con.WM_NULL, 0, 0)
@@ -115,8 +111,6 @@ class Tray(threading.Thread):
         return 0
 
     def _on_close_msg(self, hwnd, msg, wparam, lparam):
-        # DestroyWindow returns None and the WNDPROC needs an integer - which is
-        # why it can't go straight into the message table as a lambda.
         win32gui.DestroyWindow(hwnd)
         return 0
 
@@ -141,7 +135,7 @@ class Tray(threading.Thread):
         try:
             win32gui.RegisterClass(wc)
         except win32gui.error:
-            pass            # already registered by an earlier run
+            pass
         self.hwnd = win32gui.CreateWindow(
             "PicoPanelTray", self.title, win32con.WS_OVERLAPPED,
             0, 0, 0, 0, 0, 0, wc.hInstance, None)

@@ -20,14 +20,10 @@ from tkinter import ttk
 SHOT_SCALE = 2
 SHOT_W, SHOT_H = 128 * SHOT_SCALE, 32 * SHOT_SCALE
 
-# How long to let the board settle on a page before photographing it. A frame
-# takes about 18 ms, so this is a few frames - enough that what we catch is the
-# new page and not the tail of the old one.
 SETTLE_MS = 130
 
 import theme
 
-# The cards' own colours, which are now the whole app's - see theme.py.
 BG = theme.PAL["panel"]
 CARD = theme.PAL["card"]
 DIM = theme.PAL["dim"]
@@ -59,11 +55,11 @@ class PageList(ttk.Frame):
     def __init__(self, master, app):
         super().__init__(master)
         self.app = app
-        self.shots = {}             # (page, sub) -> PhotoImage
-        self._keep = []             # the shrunk ones, so Tk keeps them
+        self.shots = {}
+        self._keep = []
         self._blank = None
         self._rows = {}
-        self._drag = None           # what is in the hand, while it is
+        self._drag = None
         self._build()
 
     def _build(self):
@@ -79,9 +75,6 @@ class PageList(ttk.Frame):
         ttk.Button(head, text="+ New page",
                    command=lambda: self.app.pg_new()).pack(side="right", padx=4)
 
-        # ---- the scrolling list. Eighteen cards are far taller than the
-        # window, and a list you cannot reach the bottom of is not a list you
-        # can put in order.
         box = ttk.Frame(self)
         box.pack(fill="both", expand=True, pady=6)
         self.canvas = tk.Canvas(box, highlightthickness=0, bg=BG, width=520)
@@ -122,7 +115,6 @@ class PageList(ttk.Frame):
             self._blank = img
         return self._blank
 
-    # ------------------------------------------------------------- filling
     def refill(self):
         for child in self.list.winfo_children():
             child.destroy()
@@ -140,7 +132,7 @@ class PageList(ttk.Frame):
             tk.Label(head, text="Not shown - USER walks past these", bg=BG,
                      fg=DIM, font=("", 9)).pack(side="left", padx=8)
             self._wheel(head)
-            self._tail = head        # where the rotation ends, for the drag
+            self._tail = head
         for pg in rest:
             self._card(pg, None, False)
             self._faces(pg)
@@ -160,8 +152,8 @@ class PageList(ttk.Frame):
         mine = self._faces_of.setdefault(pg, [])
         for sub in range(1, n):
             shot = self.shots.get((pg, sub)) or self._blank_shot()
-            small = shot.subsample(SHOT_SCALE)   # the panel's own size, 128x32
-            self._keep.append(small)             # or Tk drops it and shows air
+            small = shot.subsample(SHOT_SCALE)
+            self._keep.append(small)
             row = tk.Frame(self.list, bg=CARD, bd=1, relief="solid")
             row.pack(fill="x", padx=(34, 4), pady=(0, 3))
             tk.Label(row, text="↳", bg=CARD, fg=DIM,
@@ -182,7 +174,7 @@ class PageList(ttk.Frame):
                                   self.app.face_del(p, s))
                 b.pack(side="right", padx=4)
                 self._wheel(b)
-            mine.append(row)         # they travel with the page when it moves
+            mine.append(row)
             for wdg in (row, pic):
                 wdg.bind("<Button-1>",
                          lambda _e, p=pg, s=sub: self.app.pg_show(p, s))
@@ -197,9 +189,6 @@ class PageList(ttk.Frame):
         card.pack(fill="x", padx=4, pady=3)
         self._rows[pg] = card
 
-        # The handle. Dragging anywhere on the card would fight with the
-        # double-click that opens the editor, so the grip is its own column -
-        # the same reason a list on a phone has one.
         grip = tk.Label(card, text="⠇\n⠇", bg=CARD,
                         fg=DIM if inside else "#4a5160",
                         cursor="fleur" if inside else "arrow", font=("", 9))
@@ -209,10 +198,6 @@ class PageList(ttk.Frame):
                        bg=theme.PAL["screen"], bd=0)
         pic.pack(side="left", padx=4, pady=4)
 
-        # The buttons take their room BEFORE the text does. Pack hands out
-        # space in the order it is asked for and silently drops whatever no
-        # longer fits, which is how the delete button vanished from the one
-        # card whose caption ran long.
         btn = tk.Frame(card, bg=CARD)
         btn.pack(side="right", padx=6)
 
@@ -235,46 +220,28 @@ class PageList(ttk.Frame):
             b.pack(side="right", padx=2)
             self._wheel(b)
 
-        # Keep the screen lit on this page, or let it sleep. A sun, because
-        # the panel's own word for it is "dim after twenty seconds".
         lit = self.app.aod_of(pg)
         tool("☀" if lit else "◌",
              lambda p=pg: self.app.aod_toggle(p),
              fg="#e8c45f" if lit else "#6b7280")
-        # Holds the USER button while the gamepad is armed: the page will not
-        # step past it and you disarm to leave. The GAME page has always done
-        # this - the chip says which others do.
         held = self.app.hid_of(pg)
         tool("HID", lambda p=pg: self.app.hid_toggle(p), width=3,
              fg="#7fc7ff" if held else "#6b7280")
-        # Out of the rotation, or back into it.
         tool("↓" if inside else "↑", lambda p=pg: self.app.pg_toggle(p))
-        # A page of your own, made right here rather than at the end: the place
-        # you want it is the place you were looking at.
         tool("+", lambda p=pg: self.app.pg_new(after=p))
         if self.app.slot_of(pg) is not None:
-            # Another face on this page - walked with USER without leaving it,
-            # the way GAME's are. Distinct from "+", which makes a whole page.
             tool("↳+", lambda p=pg: self.app.face_add(p), width=3)
             tool("✕", lambda p=pg: self.app.pg_delete(p), fg=theme.PAL["warn"])
 
         for wdg in (card, pic, side):
             wdg.bind("<Button-1>", lambda _e, p=pg: self.app.pg_show(p))
             wdg.bind("<Double-Button-1>", lambda _e, p=pg: self.app.pg_open(p))
-        # Last, so the recursion catches the labels and buttons inside.
         self._wheel(card)
         if inside:
             grip.bind("<ButtonPress-1>",
                       lambda e, p=pg, i=idx: self._grab(e, p, i))
             grip.bind("<B1-Motion>", self._haul)
             grip.bind("<ButtonRelease-1>", self._release)
-
-    # -------------------------------------------------------------- moving
-    #
-    # The card is lifted OUT of the list and follows the pointer pixel by
-    # pixel, with a gap left where it will land. It used to jump straight to
-    # the new position the moment the pointer crossed a card - correct, and it
-    # felt like the list was arguing with you rather than being held.
 
     def _grab(self, ev, pg, idx):
         card = self._rows.get(pg)
@@ -286,13 +253,9 @@ class PageList(ttk.Frame):
 
         card.pack_forget()
         for row in self._faces_of.get(pg, []):
-            row.pack_forget()          # the faces go with their page
+            row.pack_forget()
         self.list.update_idletasks()
 
-        # Where the OTHER cards sit with this one out of the flow. Measured
-        # once, and the gap is never counted: the drop position is then a
-        # fixed function of where the pointer is, and cannot oscillate between
-        # two answers as the layout moves under it.
         order = self.app._pg_ids[0]
         rest = [p for p in order if p != pg]
         mids = []
@@ -331,8 +294,6 @@ class PageList(ttk.Frame):
         y = ev.y_root - self.list.winfo_rooty()
         d["card"].place_configure(y=int(y - d["hold"]))
 
-        # Near an edge, the list comes to meet you - a page cannot be dragged
-        # somewhere you cannot see.
         top, height = self.canvas.winfo_rooty(), self.canvas.winfo_height()
         if ev.y_root < top + 26:
             self.canvas.yview_scroll(-1, "units")
@@ -353,7 +314,6 @@ class PageList(ttk.Frame):
         self.refill()
         self.app.pg_apply()
 
-    # ---------------------------------------------------------- collecting
     def collect(self):
         """Walk every page and photograph it, then put the panel back.
 

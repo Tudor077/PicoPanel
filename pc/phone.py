@@ -60,7 +60,7 @@ def lan_ip():
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("8.8.8.8", 53))       # no packet is sent by a UDP connect
+        s.connect(("8.8.8.8", 53))
         return s.getsockname()[0]
     except OSError:
         return "127.0.0.1"
@@ -73,14 +73,13 @@ class Bridge:
 
     def __init__(self, log=None):
         self.log = log or (lambda *_a: None)
-        self.at = None               # unix seconds, or None
+        self.at = None
         self.text = ""
-        self.seen = 0.0              # when the phone last said anything
+        self.seen = 0.0
         self.srv = None
         self.thread = None
         self.port = PORT
 
-    # ---------------------------------------------------------------- state
     def set(self, at, text):
         self.at, self.text, self.seen = at, (text or "")[:20], time.time()
         self.log("phone: next alarm %s %s"
@@ -101,7 +100,6 @@ class Bridge:
             return None
         return max(0.0, left), self.text
 
-    # ---------------------------------------------------------------- serve
     def start(self):
         if self.srv:
             return True
@@ -111,7 +109,7 @@ class Bridge:
             protocol_version = "HTTP/1.1"
 
             def log_message(self, *_a):
-                pass                 # the app has its own log
+                pass
 
             def _send(self, code, body, ctype="text/html; charset=utf-8"):
                 raw = body.encode("utf-8")
@@ -154,7 +152,6 @@ class Bridge:
                     bridge.clear()
                     return self._page()
                 if self.path.startswith("/alarm-form"):
-                    # the page's own form: at=HH:MM today, or tomorrow if past
                     vals = dict(p.split("=", 1) for p in raw.split("&") if "=" in p)
                     import urllib.parse as U
                     at = U.unquote_plus(vals.get("at", ""))

@@ -24,16 +24,11 @@ try:
 except Exception:                                   # pragma: no cover
     HAVE_PIL = False
 
-HEIGHT = 8                  # one page of the display
-SIZE = 9                    # Tahoma at 9 px fills 7 of those 8 rows
+HEIGHT = 8
+SIZE = 9
 
-# Wider than this and the marquee is a chore to read anyway, and the line stops
-# fitting the board's buffer. Titles get cut before they get here.
 MAX_W = 250
 
-# Tahoma first: Latin, Cyrillic and Greek, and hinted for exactly this size.
-# The rest are there for scripts it lacks - a missing glyph is a hollow box, so
-# a stack is worth having even if it is rarely used.
 FONTS = ["tahoma.ttf", "segoeui.ttf", "arial.ttf"]
 
 _cache = {}
@@ -72,7 +67,7 @@ def render(text):
         w = min(MAX_W, max(1, box[2] - box[0] + 1))
         img = Image.new("1", (w, HEIGHT), 0)
         d = ImageDraw.Draw(img)
-        d.fontmode = "1"                 # 1-bit screen: antialiasing is mud
+        d.fontmode = "1"
         d.text((-box[0], -box[1]), text, font=f, fill=1)
     except Exception:
         return None
@@ -85,8 +80,6 @@ def render(text):
             if px[x, y]:
                 col |= 1 << y
         out[x] = col
-    # An all-blank strip means the font had nothing for any of it. Say so, so
-    # the caller can fall back to the transliteration rather than show a gap.
     if not any(out):
         return None
     return w, bytes(out)

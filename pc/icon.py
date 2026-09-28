@@ -36,17 +36,12 @@ def draw(size=256):
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    # A bright rim all the way round: the silhouette then reads on a dark
-    # taskbar and on white paper, which is the whole job of an icon.
     d.rounded_rectangle(r(8, 20, 248, 236), radius=42 * k, fill=RIM)
     d.rounded_rectangle(r(15, 27, 241, 229), radius=36 * k, fill=BODY_TOP)
     d.rounded_rectangle(r(15, 33, 241, 229), radius=36 * k, fill=BODY)
 
-    # The screen, as large as it can be with the knob still fitting under it.
     d.rounded_rectangle(r(32, 46, 224, 148), radius=11 * k, fill=SCREEN)
 
-    # The rev bar, which is what this panel is always drawing. The last one is
-    # hot: a single warm note is what stops it reading as a generic chart.
     base = 132
     for i in range(5):
         h = 20 + i * 17
@@ -55,7 +50,7 @@ def draw(size=256):
 
     d.ellipse(r(148, 152, 228, 232), fill=KNOB)
     d.ellipse(r(162, 166, 214, 218), fill=KNOB_DK)
-    d.pieslice(r(148, 152, 228, 232), -104, -76, fill=BODY)     # the notch
+    d.pieslice(r(148, 152, 228, 232), -104, -76, fill=BODY)
 
     d.ellipse(r(42, 172, 86, 216), fill=BTN)
     return img

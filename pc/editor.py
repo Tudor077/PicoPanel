@@ -31,8 +31,6 @@ import widgets as WG
 ZOOM = 4
 CW, CH = WG.W * ZOOM, WG.H * ZOOM
 
-# Fast enough that a needle looks alive, slow enough to leave the link alone:
-# a frame is 684 characters of base64, so this is about 10 kB a second.
 SEND_HZ = 15
 
 
@@ -49,8 +47,6 @@ def _photo(img, size=None):
     return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"))
 
 
-# Made-up numbers for the shelf, so a bar is half full and a needle points
-# somewhere rather than every icon sitting at zero and looking alike.
 ICON_DATA = {"speed_kmh": 88, "rpm": 4200, "rpm_max": 7000, "fuel_pct": 62,
              "brake": 1, "throttle": 0.6, "src": "ABC", "gear": 3,
              "joy_x": 0.5, "joy_y": -0.35}
@@ -80,37 +76,28 @@ class Editor(ttk.Frame):
         super().__init__(master)
         self.app = app
         self.slot = slot
-        # Which face of that page. The name and the header bar belong to the
-        # page and are shared; only the widgets are this face's.
         self.face = face
         self.items = [WG.Widget.from_dict(d) for d in app.layout_of(slot, face)]
         self.sel = None
         self._drag = None
-        self._dnd = None            # (kind, defaults) while dragging off the shelf
+        self._dnd = None
         self._ghost = None
-        self._from = None           # where the pointer was when it was picked up
+        self._from = None
         self._warned = False
         self._photo_ref = None
         self._snap = [False, False]
         self._build()
         self._tick()
 
-    # ------------------------------------------------------------ building
     def _build(self):
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True)
 
-        # ---- the shelf, down the side. Vertical because each item is a
-        # picture of a widget and pictures want to be side by side with their
-        # names, not stacked under them in a row that runs off the window.
         shelf = ttk.LabelFrame(body, text="Widgets")
         shelf.pack(side="left", fill="y", padx=8, pady=8)
         ttk.Label(shelf, style="Hint.TLabel", wraplength=150, justify="left",
                   text="Pick one up and drop it on the screen."
                   ).pack(anchor="w", padx=6, pady=(4, 6))
-        # What it IS, in one line, when the pointer is over it. "Lamp" told
-        # nobody anything, and a name you have to guess at is a name you do
-        # not try.
         self.about = tk.StringVar(value="")
         self._icons = []
         for kind, label, defaults in WG.PALETTE:
@@ -118,8 +105,8 @@ class Editor(ttk.Frame):
             row.pack(fill="x", padx=6, pady=3)
             try:
                 img = icon(kind, defaults)
-                self._icons.append(img)       # a PhotoImage nothing holds is
-            except Exception:                 # collected, and the row goes blank
+                self._icons.append(img)
+            except Exception:
                 img = None
             lab = tk.Label(row, image=img, bd=1, relief="solid",
                            bg=theme.PAL["screen"], cursor="hand2")
@@ -141,9 +128,6 @@ class Editor(ttk.Frame):
         right = ttk.Frame(body)
         right.pack(side="left", fill="both", expand=True, pady=8)
 
-        # ---- the page itself: what it is called, and whether it wears the
-        # board's header. The name is drawn into the picture we send, so it is
-        # ours to keep - the board calls this slot MINE 3 and always will.
         top = ttk.Frame(right)
         top.pack(fill="x", padx=8, pady=(0, 6))
         ttk.Label(top, text="Page name").pack(side="left")
@@ -183,14 +167,11 @@ class Editor(ttk.Frame):
 
         ttk.Label(row, text="Shows").pack(side="left")
         self.f_var = tk.StringVar()
-        # The values are filled in per widget - a Lamp showing the clock is not
-        # a feature nobody thought of, it is a list that could not say no.
         self.f_box = ttk.Combobox(row, textvariable=self.f_var, width=15,
                                   state="readonly", values=[])
         self.f_box.pack(side="left", padx=4)
         self.f_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
 
-        # Grouped so each can be taken away whole for the kinds that ignore it.
         self.lab_grp = ttk.Frame(row)
         ttk.Label(self.lab_grp, text="Label").pack(side="left", padx=(8, 0))
         self.l_var = tk.StringVar()
@@ -198,8 +179,6 @@ class Editor(ttk.Frame):
         e.pack(side="left", padx=4)
         e.bind("<KeyRelease>", lambda _e: self._edit())
 
-        # Which button, which switch. The kinds that pick one of a list do
-        # not have a field to point at - "A3" is not telemetry, it is a choice.
         self.which_grp = ttk.Frame(row)
         ttk.Label(self.which_grp, text="Which").pack(side="left", padx=(8, 0))
         self.which_var = tk.StringVar()
@@ -208,7 +187,6 @@ class Editor(ttk.Frame):
         self.which_box.pack(side="left", padx=4)
         self.which_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
 
-        # The clock is a field, so it needs a shape: 24h, 12h, the date.
         self.fmt_grp = ttk.Frame(row)
         ttk.Label(self.fmt_grp, text="Format").pack(side="left", padx=(8, 0))
         self.fmt_var = tk.StringVar()
@@ -218,8 +196,6 @@ class Editor(ttk.Frame):
         self.fmt_box.pack(side="left", padx=4)
         self.fmt_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
 
-        # How a bar fills: solid, or one of the board's two fades - the
-        # song bar's faded track, or the rev counter's ramp.
         self.fill_grp = ttk.Frame(row)
         ttk.Label(self.fill_grp, text="Fill").pack(side="left", padx=(8, 0))
         self.fill_var = tk.StringVar()
@@ -229,9 +205,6 @@ class Editor(ttk.Frame):
         self.fill_box.pack(side="left", padx=4)
         self.fill_box.bind("<<ComboboxSelected>>", lambda _e: self._edit())
 
-        # A second field, for the kinds that read two. Hidden the rest of the
-        # time: one more combobox on every widget, greyed out on seven of the
-        # nine, is worse than a row that comes and goes.
         self.row2 = ttk.Frame(props)
         ttk.Label(self.row2, text="up / down shows").pack(side="left")
         self.fy_var = tk.StringVar()
@@ -254,14 +227,12 @@ class Editor(ttk.Frame):
             sp.bind("<KeyRelease>", lambda _e: self._edit())
             self.spins[name] = v
 
-        # A knob's detents per turn: a property of the encoder on your panel,
-        # not of this program. Twenty here, so eighteen degrees each.
         self.turn_grp = ttk.Frame(row)
         spin(self.turn_grp, "per turn", 2, 200)
 
         self.size_grp = ttk.Frame(row)
         spin(self.size_grp, "size", 6, 30)
-        self.wh_grp = ttk.Frame(row)      # the anchor everything packs before
+        self.wh_grp = ttk.Frame(row)
         self.wh_grp.pack(side="left")
         self.w_grp = ttk.Frame(self.wh_grp)
         spin(self.w_grp, "w", 1, WG.W)
@@ -282,7 +253,6 @@ class Editor(ttk.Frame):
     def _head(self):
         return self.app.header_for(self.slot, face=self.face)
 
-    # ------------------------------------------------ off the shelf and on
     def _pick(self, kind, defaults, ev):
         """Lift a widget off the shelf. The thing that follows the pointer is a
         borderless window with the icon in it - Tk has no drag and drop of its
@@ -292,8 +262,8 @@ class Editor(ttk.Frame):
         self._from = (ev.x_root, ev.y_root)
         self._kill_ghost()
         try:
-            img = icon(kind, defaults)     # before the window: if this throws,
-            win = tk.Toplevel(self)        # there is no window to leave behind
+            img = icon(kind, defaults)
+            win = tk.Toplevel(self)
             win.overrideredirect(True)
             win.attributes("-topmost", True)
             tk.Label(win, image=img, bd=0, bg=theme.PAL["screen"]).pack()
@@ -329,17 +299,14 @@ class Editor(ttk.Frame):
         if not kind_def:
             return
         kind, defaults = kind_def
-        # Where did it land? Screen coordinates into canvas coordinates - the
-        # pointer is what the user aimed with, not the widget it started on.
         cx = self.canvas.winfo_rootx()
         cy = self.canvas.winfo_rooty()
         x = (ev.x_root - cx) // ZOOM
         y = (ev.y_root - cy) // ZOOM
         if start and abs(ev.x_root - start[0]) < 5 and abs(ev.y_root - start[1]) < 5:
-            x, y = WG.W // 2, WG.H // 2   # a plain click puts it in the middle,
-        if not (0 <= x < WG.W and 0 <= y < WG.H):   # so there is a way that
-            return                      # cannot miss; a real drag that lands
-                                        # off the screen still adds nothing
+            x, y = WG.W // 2, WG.H // 2
+        if not (0 <= x < WG.W and 0 <= y < WG.H):
+            return
         w = WG.Widget(kind=kind, **defaults)
         ww, hh = self._size_of(w)
         w.x = max(0, min(WG.W - 1, int(x - ww // 2)))
@@ -349,7 +316,6 @@ class Editor(ttk.Frame):
         self._show_props()
         self._save()
 
-    # ------------------------------------------------------------- editing
     def _delete(self):
         if self.sel in self.items:
             self.items.remove(self.sel)
@@ -373,8 +339,6 @@ class Editor(ttk.Frame):
     def _hit(self, x, y):
         for w in reversed(self.items):
             bx, by, ww, hh = self._box_of(w)
-            # A one-pixel line is a thing you have to be able to grab, so
-            # nothing is ever narrower than four pixels to the pointer.
             ww, hh = max(ww, 4), max(hh, 4)
             if bx - 1 <= x < bx + ww + 1 and by - 1 <= y < by + hh + 1:
                 return w
@@ -392,9 +356,6 @@ class Editor(ttk.Frame):
             return
         dx, dy = self._drag
         w = self.sel
-        # No snapping. It pulled the widget about within two pixels of the
-        # middle, which is a deadzone by another name: you could not put a
-        # thing one pixel off centre if you wanted to. The line only tells you.
         w.x = max(0, min(WG.W - 1, ev.x // ZOOM - dx))
         w.y = max(0, min(WG.H - 1, ev.y // ZOOM - dy))
 
@@ -407,13 +368,10 @@ class Editor(ttk.Frame):
         w = self.sel
         if not w:
             return
-        # Only what this kind can actually do. Everything else is taken away
-        # rather than greyed out: a control that does nothing invites you to
-        # turn it and then wonder what you broke.
         allowed = WG.fields_for(w.kind)
         keys = [k for k, _l in allowed]
         if allowed and w.field not in keys:
-            w.field = keys[0]          # a layout from before the lists existed
+            w.field = keys[0]
             self._save()
         self.f_box["values"] = [lbl for _k, lbl in allowed]
         self.fy_box["values"] = [lbl for _k, lbl in allowed]
@@ -446,8 +404,6 @@ class Editor(ttk.Frame):
             self.fmt_grp.pack(side="left", before=self.wh_grp)
         else:
             self.fmt_grp.pack_forget()
-        # w and h only where they do something. On text they did not: the box
-        # is the box the letters come out as.
         (self.w_grp.pack(side="left") if w.kind in WG.USES_W
          else self.w_grp.pack_forget())
         (self.h_grp.pack(side="left") if w.kind in WG.USES_H
@@ -507,29 +463,18 @@ class Editor(ttk.Frame):
             w.w = int(self.spins["w"].get())
             w.h = int(self.spins["h"].get())
         except Exception:
-            pass                      # half-typed number: leave it until it's whole
+            pass
         self._save()
 
     def _save(self):
         self.app.set_layout(self.slot, [w.to_dict() for w in self.items],
                             face=self.face)
 
-    # ------------------------------------------------------------ painting
     def _tick(self):
         try:
-            # "_editing" is how a widget that hides itself when it has
-            # nothing to say - the alarm countdown - still shows up here,
-            # where you have to be able to see it to place it.
             img = WG.render(self.items, dict(self.app.widget_data(), _editing=1),
                             header=self._head())
             if img is None:
-                # Nothing to draw. What used to happen here was nothing at all:
-                # the branch below was skipped, the canvas kept whatever it had
-                # from last time, and the editor went on showing a page that was
-                # no longer being produced - while frame_bytes handed the board
-                # None. The only way in is PIL being missing, so there would be
-                # no stale frame to leave behind in practice, but a preview that
-                # lies quietly is the one thing this window must never do.
                 self.canvas.delete("all")
                 self.canvas.create_text(
                     WG.W * ZOOM // 2, WG.H * ZOOM // 2, fill="#e8744f",
@@ -545,15 +490,12 @@ class Editor(ttk.Frame):
                 w = self.sel
                 bx, by, ww, hh = self._box_of(w)
                 if w.kind in WG.AUTO_SIZE:
-                    w.w, w.h = ww, hh          # keep the stored box honest
+                    w.w, w.h = ww, hh
                 self.canvas.create_rectangle(
                     bx * ZOOM, by * ZOOM,
                     (bx + ww) * ZOOM - 1, (by + hh) * ZOOM - 1,
                     outline="#e8744f", dash=(3, 2))
         except Exception as e:
-            # Once, not sixty times a second - but once, because a preview that
-            # goes black and says nothing is how a broken _photo() lived here
-            # for a whole release.
             if not self._warned:
                 self._warned = True
                 try:

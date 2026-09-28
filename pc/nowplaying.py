@@ -30,17 +30,13 @@ try:
 except Exception:                                   # pragma: no cover
     BROWSERS, _browser_titles = {}, lambda: {}
 
-# Transliteration and the wire-safe character set both live in one place: the
-# same rules apply to a track title and to a city name in a truck sim.
 from telemetry.text import clean as _clean
 
 MAX_TITLE = 40
 MAX_ARTIST = 22
 
-PLAYING = 4          # GlobalSystemMediaTransportControlsSessionPlaybackStatus
+PLAYING = 4
 
-# Anything in the app id that means "a browser tab", and so a video rather than
-# a record: no artwork, no album, and a title worth the full width.
 _BROWSER_HINTS = tuple(sorted(
     {b[:-4] for b in BROWSERS} | {"opera", "chrome", "msedge", "edge",
                                   "firefox", "brave", "vivaldi"}))
@@ -85,7 +81,6 @@ class NowPlaying:
         with self._lock:
             return self._snap
 
-    # -- the work ---------------------------------------------------------
     def _kind(self, app_id):
         low = (app_id or "").lower()
         if "spotify" in low:
@@ -99,9 +94,6 @@ class NowPlaying:
         if not sessions:
             return None
 
-        # The one that's actually playing wins. Failing that, take the first -
-        # a paused player is still worth showing, so the page isn't empty the
-        # moment you hit pause.
         chosen = None
         for s in sessions:
             try:
@@ -125,17 +117,11 @@ class NowPlaying:
         artist = _clean(props.artist, MAX_ARTIST)
         if not title:
             if not raw.strip():
-                return None              # genuinely nothing playing
-            # Something IS playing, we just can't write its name in this font -
-            # Japanese, Chinese, emoji. A page with a placeholder still gives
-            # you the disc, the time and the bar; claiming silence gives you
-            # nothing and is a lie besides.
+                return None
             title, artist = (artist, "") if artist else ("(untitled)", "")
 
         pos = _secs(tl.position)
         dur = _secs(tl.end_time)
-        # How stale that position is. The board adds this on, then keeps
-        # counting - see npPosAt in the firmware.
         age = 0.0
         try:
             last = tl.last_updated_time
@@ -143,7 +129,7 @@ class NowPlaying:
                 import datetime
                 now = datetime.datetime.now(datetime.timezone.utc)
                 age = max(0.0, (now - last).total_seconds())
-                if age > 3600:          # a nonsense stamp; don't "correct" by an hour
+                if age > 3600:
                     age = 0.0
         except Exception:
             age = 0.0
@@ -151,8 +137,6 @@ class NowPlaying:
         app_id = chosen.source_app_user_model_id
         kind = self._kind(app_id)
 
-        # Only call it YouTube when the browser itself says so - the same rule
-        # the volume targets use.
         label = "browser" if kind == "y" else "player"
         if kind == "y":
             for titles in _browser_titles().values():
@@ -164,8 +148,6 @@ class NowPlaying:
         return {
             "title": title,
             "artist": artist,
-            # What was actually written, before transliteration. The PC draws
-            # the strip from this, so the panel shows the real alphabet.
             "raw_title": raw,
             "raw_artist": str(props.artist or ""),
             "playing": info.playback_status == PLAYING,
@@ -176,9 +158,6 @@ class NowPlaying:
             "label": label,
         }
 
-    # How often to look when nothing is looking at us. The session API is a
-    # cross-process COM call per read; four a second, for ever, to feed a page
-    # nobody is on is most of what this program was doing while idle.
     IDLE_S = 3.0
 
     def want(self, on):

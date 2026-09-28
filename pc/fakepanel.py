@@ -35,15 +35,13 @@ import time
 
 SCREEN_W = 128
 SCREEN_H = 32
-REPORT_HZ = 5.0          # the board reports ~5x/second
-MIRROR_HZ = 10.0         # and mirrors at ~10 fps while 'o' is on
-SLEEP_DIM_S = 10.0       # screen dims after 10 s idle, dark after 20 s
+REPORT_HZ = 5.0
+MIRROR_HZ = 10.0
+SLEEP_DIM_S = 10.0
 SLEEP_OFF_S = 20.0
-USR_HOLD_MS = 1000       # USER held this long = arm / disarm HID
-USR_DOUBLE_MS = 250      # window for the second press ('w' changes it on the board)
+USR_HOLD_MS = 1000
+USR_DOUBLE_MS = 250
 
-# 5x7 glyphs, one byte per column, bit 0 = top row. Same shapes the Adafruit
-# GFX default font uses, so the emulated screen reads like the real one.
 FONT = {
     " ": (0x00, 0x00, 0x00, 0x00, 0x00), "!": (0x00, 0x00, 0x5F, 0x00, 0x00),
     "%": (0x23, 0x13, 0x08, 0x64, 0x62), "*": (0x14, 0x08, 0x3E, 0x08, 0x14),
@@ -70,15 +68,11 @@ FONT = {
     "Y": (0x03, 0x04, 0x78, 0x04, 0x03), "Z": (0x61, 0x51, 0x49, 0x45, 0x43),
 }
 
-# The PG= number is an index into this, and it has to match the firmware's own
-# enum exactly - the app looks pages up by number. MUSIC and the eight pages
-# you draw yourself arrived after this file was first written, which is why it
-# had nine of them and the app could not make sense of anything it said.
 PAGE_NAME = ["PANEL", "GAME", "MUSIC",
              "MINE 1", "MINE 2", "MINE 3", "MINE 4",
              "MINE 5", "MINE 6", "MINE 7", "MINE 8",
              "HID", "SWITCHES", "ENCODER", "BUTTONS", "PCF8574", "I2C", "INFO"]
-PAGES = PAGE_NAME                      # kept for anything reading the old name
+PAGES = PAGE_NAME
 (P_OVERVIEW, P_GAME, P_MUSIC, P_CUSTOM1, _C2, _C3, _C4, _C5, _C6, _C7, _C8,
  P_HID, P_SW, P_ENC, P_BTN, P_PCF, P_I2C, P_INFO) = range(len(PAGE_NAME))
 CUS_FIRST, CUS_SLOTS, CUS_FACES = P_CUSTOM1, 8, 4
@@ -91,7 +85,6 @@ def cus_slot(page):
     i = page - CUS_FIRST
     return i if 0 <= i < CUS_SLOTS else None
 
-# btn[].name in the firmware - two characters, so they fit the 17px boxes.
 BTN_NAMES = ["UP", "DN", "LF", "RT", "MD", "ST", "EN"]
 
 HELP = [
@@ -164,40 +157,33 @@ class FakePanel:
     def __init__(self, seed=None, quiet_demo=False):
         self.rng = random.Random(seed)
         self.t0 = time.monotonic()
-        self.quiet_demo = quiet_demo      # True = inputs only move when poked
+        self.quiet_demo = quiet_demo
 
-        self.sw1 = 2                      # firmware calls it SW2: 3 positions
-        self.sw2 = 3                      # firmware calls it SW3: 5 positions
+        self.sw1 = 2
+        self.sw2 = 3
         self.enc = 0
         self._last_dir = 0
         self.total = 0
         self.errors = 0
-        self.btn = [False] * 7            # UP DWN LFT RHT MID SET ENC_SW
-        self.pcf = [False] * 8            # A1..A4 B1..B4
+        self.btn = [False] * 7
+        self.pcf = [False] * 8
         self.page = 0
-        self.media = False       # layer two, latched by double-tapping USER
+        self.media = False
         self.game_sub = 0
         self.music_sub = 0
-        # The rotation, and where we are in it. The app sends this with "%pg"
-        # on every connect; until then it is every page, the way the board
-        # comes up before anyone has told it otherwise.
         self.page_list = list(range(len(PAGE_NAME)))
         self.page_slot = 0
-        # Your own pages: the finished picture for each face, how many faces
-        # each has, and which one is showing. The app sends the pictures with
-        # "%cv=<slot>,<face>,<base64>" - the same 512 bytes it sends the board.
         self.cus = [[None] * CUS_FACES for _ in range(CUS_SLOTS)]
         self.cus_subs = [1] * CUS_SLOTS
         self.cus_sub = [0] * CUS_SLOTS
-        self.hid_lock = 0        # pages that hold USER while HID is armed
-        self.aod = 0             # pages that keep the screen lit
+        self.hid_lock = 0
+        self.aod = 0
         self.hdr_style = 0
-        self._said_page = None   # what the last !PAGE said, so it is said once
+        self._said_page = None
         self._usr_down = False
         self._usr_press_at = 0.0
         self._usr_stage1 = False
         self._usr_last_short = 0.0
-        # What the panel looked like before the last short press - see user_up.
         self._before = (0, 0, 0, 0, [0] * CUS_SLOTS)
         self.hid = True
         self.mirror = False
@@ -214,7 +200,6 @@ class FakePanel:
         self._emit(b"PicoPanel ready.  '?' for the command list.\r\n")
         self._emit(b"[emulator] no hardware attached - this panel is simulated\r\n")
 
-    # ---------------------------------------------------------------- output
     def _emit(self, data):
         self.out += data if isinstance(data, bytes) else data.encode("ascii", "ignore")
 
@@ -224,7 +209,6 @@ class FakePanel:
     def poke(self):
         self.last_input = time.monotonic()
 
-    # ------------------------------------------------------------ the report
     def report_line(self):
         btn = "".join("1" if b else "0" for b in self.btn)
         pcf = "".join("1" if b else "0" for b in self.pcf)
@@ -247,7 +231,6 @@ class FakePanel:
         held = [str(i) for i in range(len(PAGE_NAME)) if self.hid_lock >> i & 1]
         return ",".join(held) if held else "-"
 
-    # ---------------------------------------------------------- which face
     def page_face(self):
         """(which face is showing, how many this page has) - what !PAGE says."""
         sl = cus_slot(self.page)
@@ -271,11 +254,10 @@ class FakePanel:
             self._said_page = now
             self._line("!PAGE %d %d %d %d" % now)
 
-    # ------------------------------------------------------------- the screen
     def sleep_state(self):
         idle = time.monotonic() - self.last_input
         if self.game_src != "-":
-            return 0                       # never sleeps while a game feeds it
+            return 0
         if idle > SLEEP_OFF_S:
             return 2
         if idle > SLEEP_DIM_S:
@@ -293,9 +275,6 @@ class FakePanel:
         s.clear()
         sl = cus_slot(self.page)
         if sl is not None:
-            # A page of yours arrives as a finished picture and is copied
-            # straight into the screen, header and all - the same memcpy the
-            # firmware does. Nothing else is drawn over it.
             frame = self.cus[sl][self.cus_sub[sl]]
             if frame:
                 s.buf[:] = bytearray(frame[:len(s.buf)])
@@ -321,9 +300,6 @@ class FakePanel:
         elif self.page == P_HID:
             self._draw_hid()
         else:
-            # HID, I2C and INFO read live hardware the emulator has no model
-            # of; drawing a guess would be worse than saying so.
-            # I2C and INFO read live bus state there is no model for.
             s.text(0, 13, "not emulated")
             s.text(0, 23, PAGE_NAME[self.page] + " needs hw")
         return s
@@ -353,9 +329,6 @@ class FakePanel:
         cur, tot = self.slot_of(self.page) + 1, len(self.page_list)
         face, faces = self.page_face()
         if faces > 1:
-            # On a page with faces the header counts those, not the rotation:
-            # while you are walking them, which one you are on is the thing you
-            # cannot otherwise tell.
             cur, tot = face + 1, faces
         buf = "{}{}/{}".format(mark, cur, tot)
         s.text(SCREEN_W - 2 - 6 * len(buf), 1, buf, color=0)
@@ -377,7 +350,6 @@ class FakePanel:
         self._btn_row(21)
 
     def _draw_sw_page(self):
-        # drawSwRow(): "<name> <pos>/<expect>  c<common>  v<seen>"
         s = self.screen
         s.text(0, 11, "SW2 {}/3  c1  v3".format(self.sw1 or "?"))
         s.text(0, 21, "SW3 {}/5  c1  v5".format(self.sw2 or "?"))
@@ -395,7 +367,6 @@ class FakePanel:
         s.text(0, 24, " ".join("0" for _ in BTN_NAMES))
 
     def _draw_pcf(self):
-        # Eight 15x10 boxes numbered 1..8 - drawPcf().
         s = self.screen
         for i in range(8):
             x = i * 16
@@ -431,9 +402,6 @@ class FakePanel:
     def frame_line(self):
         state = self.sleep_state()
         if state == 2:
-            # The board sends ONE blank frame when it sleeps, then goes quiet -
-            # matching "Send one blank frame when the panel sleeps, not twenty
-            # a second".
             if self._blank_sent:
                 return None
             self._blank_sent = True
@@ -444,7 +412,6 @@ class FakePanel:
         return (f"!FB {s.w} {s.h} "
                 f"{base64.b64encode(bytes(s.buf)).decode()}")
 
-    # --------------------------------------------------------------- the demo
     def _demo_step(self, now):
         """Move the inputs so every lamp in the app lights up eventually."""
         if self.quiet_demo:
@@ -471,7 +438,6 @@ class FakePanel:
             self.sw2 = self.rng.randint(1, 5)
             self.poke()
 
-    # -------------------------------------------------------- the USER button
     def user_down(self):
         """Press. Nothing happens yet: the page changes on RELEASE, because the
         button also has a long press and the page would otherwise jump every
@@ -494,16 +460,10 @@ class FakePanel:
         self._usr_down = False
         self.poke()
         if self._usr_stage1:
-            return                      # the hold was the action
+            return
         now = time.monotonic()
         gap = int((now - self._usr_last_short) * 1000) if self._usr_last_short else 0
         if self._usr_last_short and gap < USR_DOUBLE_MS:
-            # Second press: put back whatever the first one moved, and toggle.
-            # It used to step a page back on the assumption that the first
-            # press had stepped one forward - but on a sub-page it had walked
-            # a face instead, so two quick presses left you a page BACK from
-            # where you started. The board had the same fault and lost it the
-            # same way: remember, then restore.
             (self.page, self.page_slot, self.game_sub, self.music_sub,
              self.cus_sub) = self._before
             self._usr_last_short = 0.0
@@ -515,14 +475,10 @@ class FakePanel:
             self._line("[usr] single press, {} ms after the previous one "
                        "(window {})".format(gap, USR_DOUBLE_MS))
         self._usr_last_short = now
-        # Noted BEFORE the press does anything, because it is what the next one
-        # puts back if it comes quickly enough to be half of a double.
         self._before = (self.page, self.page_slot, self.game_sub,
                         self.music_sub, list(self.cus_sub))
         self.short_press()
 
-    # ------------------------------------------------------------- the inputs
-    # ------------------------------------------------------------ the walk
     def slot_of(self, page):
         """Where a page sits in the rotation, or 0 if it has been left out."""
         try:
@@ -569,7 +525,6 @@ class FakePanel:
             return
         self.step(1)
 
-    # --------------------------------------------------------- the % commands
     def percent(self, text):
         """The PC's settings line: "%pg=1,2;%rs=0", and the rest.
 
@@ -640,13 +595,10 @@ class FakePanel:
             elif key == "hs":
                 self.hdr_style = int(val or 0)
             elif key == "rs":
-                pass                       # the rev counter's shape: GAME only
+                pass
             elif key == "fl":
                 self.poke()
                 self._line("[alarm] %s" % val.partition(",")[2])
-            # %al, %tm, %na, %ic, %au, %ts, %ky and the rest are accepted and
-            # ignored: they change nothing this emulator can show.
-
     def command(self, text):
         """One line from the PC: a command letter, or a '$' telemetry line."""
         text = text.strip()
@@ -691,7 +643,6 @@ class FakePanel:
         else:
             self._line(f"'{c}' acknowledged (emulated, no hardware to act on)")
 
-    # ----------------------------------------------------------------- ticking
     def service(self, now=None):
         """Produce whatever the board would have sent by now."""
         now = time.monotonic() if now is None else now
@@ -759,7 +710,7 @@ def main(argv):
     art = "--art" in argv
     seconds = 6.0
     panel = FakePanel()
-    panel.command("o")                       # mirror on, so frames flow
+    panel.command("o")
     end = time.monotonic() + seconds
     shown = 0
     while time.monotonic() < end:

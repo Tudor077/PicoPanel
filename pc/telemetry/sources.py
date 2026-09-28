@@ -43,12 +43,12 @@ class RevRange:
     source gets its full scale straight from the SDK.
     """
 
-    THROTTLE_MIN = 0.85       # "floored"
-    RPM_MIN = 3000.0          # below this it's idle, not a limiter
-    HOLD_FRAMES = 30          # how long the peak must sit still to be believed
-    OVERSHOOT = 100.0         # how far past it we must go before relearning
-    GAP_S = 1.5               # a silence that means "maybe a different car"
-    FLOOR = 9000.0            # provisional scale while we know nothing
+    THROTTLE_MIN = 0.85
+    RPM_MIN = 3000.0
+    HOLD_FRAMES = 30
+    OVERSHOOT = 100.0
+    GAP_S = 1.5
+    FLOOR = 9000.0
 
     def __init__(self):
         self.reset()
@@ -71,7 +71,7 @@ class RevRange:
             self.peak = rpm
             self.since_peak = 0
             if self.peak > self.limiter + self.OVERSHOOT:
-                self.limiter = 0.0      # it went past: that was too low
+                self.limiter = 0.0
         else:
             self.since_peak += 1
 
@@ -83,9 +83,7 @@ class RevRange:
 
         if self.limiter > 0.0:
             return self.limiter * 1.08, self.limiter
-        # we don't know yet: big scale, no red
         return max(self.FLOOR, self.peak * 1.05), 0.0
-
 
 
 class JsonPoller:
@@ -112,15 +110,13 @@ class JsonPoller:
     or was never running costs one failed attempt and nothing more.
     """
 
-    # A dead candidate must be cheap to rule out, so connecting gets its own,
-    # much shorter budget than reading a reply does.
     CONNECT_TIMEOUT = 0.35
 
     def __init__(self, host, port, timeout=1.0):
         self.host, self.port, self.timeout = host, port, timeout
         self._conn = None
-        self._addrs = None          # resolved lazily, once
-        self._pinned = None         # the address that last answered
+        self._addrs = None
+        self._pinned = None
 
     def _candidates(self):
         """Every address the name resolves to, IPv4 first, without duplicates."""
@@ -130,7 +126,7 @@ class JsonPoller:
             infos = socket.getaddrinfo(self.host, self.port,
                                        type=socket.SOCK_STREAM)
         except OSError:
-            self._addrs = [self.host]       # already a literal, or no DNS
+            self._addrs = [self.host]
             return self._addrs
         v4 = [i[4][0] for i in infos if i[0] == socket.AF_INET]
         v6 = [i[4][0] for i in infos if i[0] == socket.AF_INET6]
@@ -161,18 +157,18 @@ class JsonPoller:
                                                 timeout=self.CONNECT_TIMEOUT)
             except OSError:
                 continue
-            sock.settimeout(self.timeout)   # reading a reply may take longer
+            sock.settimeout(self.timeout)
             conn = http.client.HTTPConnection(addr, self.port,
                                               timeout=self.timeout)
-            conn.sock = sock                # hand it the socket we just opened
+            conn.sock = sock
             self._pinned = addr
             return conn
-        self._pinned = None                 # nothing answered; re-try them all
+        self._pinned = None
         return None
 
     def get(self, path):
         """Parsed JSON, or None. Never raises."""
-        for attempt in (1, 2):          # second try is after a reconnect
+        for attempt in (1, 2):
             try:
                 if self._conn is None:
                     self._conn = self._connect()
@@ -198,7 +194,7 @@ class Source:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
-        self.status = "starting..."   # until its thread reports something
+        self.status = "starting..."
 
     def start(self):
         self._stop.clear()
@@ -235,9 +231,6 @@ class Source:
         raise NotImplementedError
 
 
-# ---------------------------------------------------------------------
-# OutGauge (BeamNG.drive, Live for Speed, and any LFS-compatible sim)
-# ---------------------------------------------------------------------
 class OutGaugeSource(Source):
     """BeamNG: Options -> Others -> OutGauge -> on, IP 127.0.0.1, the port below.
     LFS and a few rally sims speak the same protocol.
@@ -248,13 +241,8 @@ class OutGaugeSource(Source):
 
     name = "OutGauge"
 
-    # < = little-endian, no padding. See the OutGauge docs that ship with LFS.
-    # The order: time, car[4], flags, gear, plid,
-    #            speed, rpm, turbo, engTemp, fuel, oilPressure, oilTemp, <- 7 floats
-    #            dashLights, showLights, throttle, brake, clutch,
-    #            display1[16], display2[16]
     _FMT = "<I4sHBBfffffffIIfff16s16s"
-    _SIZE = struct.calcsize(_FMT)          # 92
+    _SIZE = struct.calcsize(_FMT)
 
     def __init__(self, port=4444, label="BeamNG"):
         super().__init__()
@@ -270,23 +258,18 @@ class OutGaugeSource(Source):
         (_time, car, _flags, gear, _plid, speed, rpm, turbo, engtemp,
          fuel, _oilp, _oilt, _dash, show, thr, brk, _clu, d1, _d2) = f
 
-        # LFS numbers gears 0=reverse, 1=neutral, 2=first. We keep 0=neutral and
-        # negative=reverse, so every game looks the same to the board.
         g = -1 if gear == 0 else (gear - 1)
 
-        # showLights is LFS's mask of lit warning lights: bit 32 = left
-        # indicator, 64 = right. (128 would be "either"; we don't use it, hazards
-        # are recognised from both being lit at once.)
         blk = (1 if (show & 32) else 0) | (2 if (show & 64) else 0)
 
         return Telemetry(
-            src="",                               # filled in by the caller
+            src="",
             kind="car",
             blinkers=blk,
-            speed_kmh=speed * 3.6,                # OutGauge gives m/s
+            speed_kmh=speed * 3.6,
             rpm=rpm,
             gear=g,
-            fuel_pct=fuel * 100.0,                # 0..1
+            fuel_pct=fuel * 100.0,
             throttle=thr,
             brake=brk,
             turbo_bar=turbo,
@@ -298,15 +281,11 @@ class OutGaugeSource(Source):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(0.5)
-            # 0.0.0.0, not 127.0.0.1: we also receive if the game sends to an
-            # interface other than loopback. It costs nothing and removes a whole
-            # category of "nothing is arriving".
             sock.bind(("0.0.0.0", self.port))
         except OSError as e:
             self.status = f"can't listen on {self.port}: {e}"
             return
         self.status = f"listening on UDP {self.port}"
-        # OutGauge sends neither the rev range nor the redline - we learn them.
         revs = RevRange()
         learned = False
         while not self._stop.is_set():
@@ -331,9 +310,6 @@ class OutGaugeSource(Source):
         sock.close()
 
 
-# ---------------------------------------------------------------------
-# Euro Truck Simulator 2 / American Truck Simulator
-# ---------------------------------------------------------------------
 class Ets2HttpSource(Source):
     """Reads from the ETS2 telemetry server (the JSON API on localhost).
 
@@ -348,16 +324,13 @@ class Ets2HttpSource(Source):
 
     name = "ETS2"
 
-    # When the server doesn't answer we slow down: the app runs all the time, and
-    # 10 failing attempts a second is a percent of CPU burnt for nothing while
-    # you aren't playing. Once it answers we go back to full rate.
     IDLE_PERIOD = 3.0
 
     def __init__(self, host="localhost", port=25555,
                  path="/api/ets2/telemetry", hz=60):
         super().__init__()
         self.host, self.port, self.path = host, port, path
-        self.url = "http://%s:%d%s" % (host, port, path)   # for the status line
+        self.url = "http://%s:%d%s" % (host, port, path)
         self.period = 1.0 / hz
 
     @staticmethod
@@ -375,15 +348,8 @@ class Ets2HttpSource(Source):
         job = doc.get("job") or {}
         text = job.get("destinationCity") or nav.get("nextRestStopTime") or ""
 
-        # Trucks need no learning: the SDK gives the full scale directly. We put
-        # the redline at 90% of it - on a truck the red zone really does start
-        # well below the maximum, unlike a car.
         rpm_max = truck.get("engineRpmMax") or 0.0
 
-        # "On" is the lamp, flashing as it does on the dash; "Active" is the
-        # stalk, steady for as long as it is down. The lamp is what the screen
-        # should show - it is what makes the arrow blink. Older servers only
-        # have "Active".
         def _lamp(side):
             v = truck.get("blinker%sOn" % side)
             return truck.get("blinker%sActive" % side) if v is None else v
@@ -414,12 +380,12 @@ class Ets2HttpSource(Source):
         while not self._stop.is_set():
             doc = poll.get(self.path)
             if doc is None:
-                wait = self.IDLE_PERIOD     # not answering: slow down
+                wait = self.IDLE_PERIOD
                 if not warned:
                     self.status = "the telemetry server isn't answering"
                     warned = True
             else:
-                wait = self.period          # answering: full rate
+                wait = self.period
                 tel = self.decode(doc)
                 if tel:
                     self._put(tel)
@@ -431,9 +397,6 @@ class Ets2HttpSource(Source):
         poll.close()
 
 
-# ---------------------------------------------------------------------
-# Microsoft Flight Simulator
-# ---------------------------------------------------------------------
 class MsfsSource(Source):
     """Through SimConnect.  pip install SimConnect
 
@@ -445,9 +408,9 @@ class MsfsSource(Source):
     name = "MSFS"
 
     VARS = {
-        "speed_kmh": ("AIRSPEED_INDICATED", 1.852),   # knots -> km/h
+        "speed_kmh": ("AIRSPEED_INDICATED", 1.852),
         "rpm": ("GENERAL_ENG_RPM:1", 1.0),
-        "alt_m": ("PLANE_ALTITUDE", 0.3048),          # feet -> metres
+        "alt_m": ("PLANE_ALTITUDE", 0.3048),
         "fuel_pct": ("FUEL_TOTAL_QUANTITY_WEIGHT", None),
     }
 
@@ -462,9 +425,6 @@ class MsfsSource(Source):
         except ImportError:
             self.status = "package missing: pip install SimConnect"
             return
-        # We retry slowly: if you start the simulator after the app, the source
-        # has to catch on by itself. It used to give up for good on the first
-        # attempt, leaving you without telemetry until you restarted everything.
         sm = aq = None
         while not self._stop.is_set() and aq is None:
             try:
@@ -484,7 +444,7 @@ class MsfsSource(Source):
                 alt = aq.get("PLANE_ALTITUDE") or 0.0
                 pct = aq.get("FUEL_TOTAL_QUANTITY") or 0.0
                 cap = aq.get("FUEL_TOTAL_CAPACITY") or 0.0
-                vs = aq.get("VERTICAL_SPEED") or 0.0          # ft/s
+                vs = aq.get("VERTICAL_SPEED") or 0.0
                 hdg = aq.get("PLANE_HEADING_DEGREES_MAGNETIC") or 0.0
                 c1 = aq.get("COM_ACTIVE_FREQUENCY:1") or 0.0
                 c2 = aq.get("COM_ACTIVE_FREQUENCY:2") or 0.0
@@ -502,9 +462,6 @@ class MsfsSource(Source):
                     if aq.get("AUTOPILOT_APPROACH_HOLD"):
                         ap.append("APR")
 
-                # SimConnect gives angles in radians for some variables and in
-                # degrees for others, depending on the version. Under 7 it can't
-                # be a heading in degrees, so it's radians.
                 hdg_deg = math.degrees(hdg) if hdg < 7.0 else hdg
 
                 self._put(Telemetry(
@@ -512,7 +469,7 @@ class MsfsSource(Source):
                     kind="air",
                     speed_kmh=ias * 1.852,
                     kts=ias,
-                    vspeed_fpm=vs * 60.0,                 # ft/s -> ft/min
+                    vspeed_fpm=vs * 60.0,
                     alt_ft=alt,
                     hdg=hdg_deg,
                     rpm=rpm,
@@ -530,9 +487,6 @@ class MsfsSource(Source):
             self._stop.wait(self.period)
 
 
-# ---------------------------------------------------------------------
-# Generic HTTP intake (Roblox through a tunnel, your own scripts, anything)
-# ---------------------------------------------------------------------
 class HttpIngestSource(Source):
     """Listens for JSON POSTs and takes them as telemetry.
 
@@ -607,9 +561,6 @@ class HttpIngestSource(Source):
         super().stop()
 
 
-# ---------------------------------------------------------------------
-# A generator, so you can see the screen with no game at all
-# ---------------------------------------------------------------------
 class DemoSource(Source):
     name = "DEMO"
 
@@ -625,23 +576,19 @@ class DemoSource(Source):
                 speed_kmh=max(0.0, speed),
                 rpm=rpm,
                 rpm_max=2700,
-                redline=2400,          # so the shift marker shows up too
+                redline=2400,
                 gear=max(1, min(12, int(abs(speed) / 10) + 1)),
                 fuel_pct=50 + 40 * math.sin(t / 30.0),
                 throttle=max(0.0, math.sin(t / 7.0)),
                 brake=max(0.0, -math.sin(t / 7.0)),
                 engine_c=85 + 5 * math.sin(t / 11.0),
                 turbo_bar=max(0.0, 1.2 * math.sin(t / 7.0)),
-                blinkers=[0, 1, 2, 3][int(t / 5) % 4],   # changes every 5 s
+                blinkers=[0, 1, 2, 3][int(t / 5) % 4],
                 text="test, no game",
             ))
             self._stop.wait(0.1)
 
 
-
-# ---------------------------------------------------------------------
-# CorsaConnect (its telemetry mirror)
-# ---------------------------------------------------------------------
 class CorsaSource(Source):
     """Receives the packets CorsaConnect already sends to the phone.
 
@@ -660,10 +607,8 @@ class CorsaSource(Source):
 
     name = "Corsa"
 
-    # "CT" + version + gear, then 11 floats, flags, lights, two displays.
-    # See TelemetryPacket::encode() in server/src/protocol.rs.
     _FMT = "<2sBb11fHI16s16s"
-    _SIZE = struct.calcsize(_FMT)          # 86
+    _SIZE = struct.calcsize(_FMT)
     _VERSION = 7
 
     def __init__(self, port=5051):
@@ -680,11 +625,8 @@ class CorsaSource(Source):
         if magic != b"CT":
             return None
         if ver != cls._VERSION:
-            # We don't guess at an unknown format: better to stay quiet than to
-            # show numbers read out of fields that have moved.
             return None
 
-        # The same convention as OutGauge: 0 = reverse, 1 = neutral, 2 = first.
         g = -1 if gear == 0 else (gear - 1)
         blk = (1 if (show & 32) else 0) | (2 if (show & 64) else 0)
 
@@ -732,10 +674,6 @@ class CorsaSource(Source):
         sock.close()
 
 
-
-# ---------------------------------------------------------------------
-# War Thunder
-# ---------------------------------------------------------------------
 class WarThunderSource(Source):
     """Reads the local HTTP telemetry the game serves on port 8111.
 
@@ -760,22 +698,17 @@ class WarThunderSource(Source):
 
     name = "WarThunder"
 
-    # Fields that only ever appear in a cockpit, and only ever in a hull.
     AIR_KEYS = ("aviahorizon_pitch", "aviahorizon_roll", "vario",
                 "altitude_10k", "compass")
     GROUND_KEYS = ("gear_num", "crew_total", "driver_state", "stabilizer",
                    "driving_direction_mode")
 
-    # 60 Hz, to match the board's screen. The HTTP round trip is not what
-    # costs here - see JsonPoller - so there is no reason to feed the panel
-    # more slowly than it draws.
     def __init__(self, host="localhost", port=8111, hz=60):
         super().__init__()
         self.host, self.port = host, port
         self.period = 1.0 / hz
         self.idle_period = 3.0
 
-    # ---------------------------------------------------------------- helpers
     @staticmethod
     def classify(ind, state=None):
         """'air', 'car', or None when no vehicle is in play."""
@@ -785,8 +718,6 @@ class WarThunderSource(Source):
             return "air"
         if any(k in ind for k in WarThunderSource.GROUND_KEYS):
             return "car"
-        # Nothing decisive in the indicators: the flight model only answers
-        # valid for an aircraft, so it breaks the tie.
         if isinstance(state, dict) and state.get("valid"):
             return "air"
         return "car"
@@ -811,15 +742,10 @@ class WarThunderSource(Source):
 
         rpm = cls._f(ind, "rpm") or cls._f(st, "RPM 1", "RPM throttle 1, %")
         peak = max(peak_rpm, rpm)
-        # War Thunder gives no redline, for either vehicle. We scale to the
-        # highest revs seen, rounded up, and send no redline at all rather than
-        # inventing one - the panel then draws the bar with no red mark.
         rpm_max = math.ceil(max(peak, 1000.0) / 500.0) * 500.0
 
         if kind == "car":
             gear = int(cls._f(ind, "gear"))
-            # driving_direction_mode false means the box is in reverse; the gear
-            # number itself stays positive, so the sign has to come from here.
             if ind.get("driving_direction_mode") is False and gear != 0:
                 gear = -abs(gear)
             return Telemetry(
@@ -829,7 +755,7 @@ class WarThunderSource(Source):
                 rpm=rpm,
                 rpm_max=rpm_max,
                 gear=gear,
-                fuel_pct=-1.0,               # not reported for ground vehicles
+                fuel_pct=-1.0,
                 engine_c=cls._f(ind, "water_temperature", "oil_temperature"),
                 crew="%d/%d" % (int(cls._f(ind, "crew_current")),
                                 int(cls._f(ind, "crew_total"))),
@@ -840,8 +766,6 @@ class WarThunderSource(Source):
         fuel0 = cls._f(st, "Mfuel0, kg")
         ias = cls._f(st, "IAS, km/h") or cls._f(ind, "speed")
 
-        # The aircraft pages are laid out for aviation units, and War Thunder
-        # answers in metric - so the conversions live here, not on the board.
         return Telemetry(
             src="WT",
             kind="wtair",
@@ -870,14 +794,13 @@ class WarThunderSource(Source):
         while not self._stop.is_set():
             ind = poll.get("/indicators")
             if ind is None:
-                wait = self.idle_period      # not running: stop hammering it
+                wait = self.idle_period
                 self.status = "not running"
                 last_kind = None
                 self._stop.wait(wait)
                 continue
 
             kind = self.classify(ind)
-            # /state is only worth a round trip in an aircraft.
             st = poll.get("/state") if kind != "car" else None
             tel = self.decode(ind, st, peak)
             wait = self.period
@@ -887,7 +810,7 @@ class WarThunderSource(Source):
                 peak = max(peak, tel.rpm)
                 if tel.kind != last_kind:
                     last_kind = tel.kind
-                    peak = tel.rpm          # new vehicle, new rev range
+                    peak = tel.rpm
                     self.status = "%s: %s" % (
                         "aircraft" if tel.kind == "wtair" else "ground vehicle",
                         tel.text or "?")

@@ -41,29 +41,10 @@ try:
 except Exception:                                   # pragma: no cover
     HAVE_UIA = False
 
-# Spotify's slider snaps to ten steps. Four percent a detent would leave the
-# knob doing nothing most of the time.
 STEP = 10
 
-# Finding the slider costs about 40 ms, so the element is kept. An app with no
-# slider at all is only re-checked this often, or every detent would pay for a
-# search that is going to fail again.
 RETRY_S = 5.0
 
-
-# A guard against touching the app while a fullscreen game was in front used to
-# live here. It is gone, and the reasoning is worth keeping.
-#
-# The measured cause of being thrown out of a game was this module polling
-# Spotify twice a second in the background, for ever. That is fixed and stays
-# fixed. The guard was a second, GUESSED cause: it blocked the volume exactly
-# where you most want it - in a game - and left the mixer channel at 100 moving
-# four percent at a time, which is nothing you can hear. A definite regression
-# bought protection against something never actually observed.
-#
-# If reaching into the app does turn out to be a problem on its own, the switch
-# for it is in the app: "Move the app's own volume slider", which leaves only
-# the mixer channel and touches no other window at all.
 
 class InAppVolume:
     """Per-application volume through the app's own UI.
@@ -79,11 +60,10 @@ class InAppVolume:
         self._uia = None
         self._uia_thread = None
         self._mod = None
-        self._cache = {}        # procname -> RangeValue pattern, or None
-        self._tried = {}        # procname -> when we last looked
-        self._want = {}         # procname -> the level we last asked for
+        self._cache = {}
+        self._tried = {}
+        self._want = {}
 
-    # -- setting up -------------------------------------------------------
     def _client(self):
         """The UIA client for this thread, or None."""
         if not HAVE_UIA:
@@ -102,14 +82,12 @@ class InAppVolume:
             self._uia = comtypes.client.CreateObject(
                 mod.CUIAutomation, interface=mod.IUIAutomation)
             self._uia_thread = me
-            # A fresh client means the cached elements came from the old one.
             self._cache.clear()
             return self._uia
         except Exception as e:
             self.error = "%s: %s" % (type(e).__name__, e)
             return None
 
-    # -- finding the slider ----------------------------------------------
     def _windows_of(self, procname):
         """UIA elements for that app's visible top-level windows.
 
@@ -166,15 +144,12 @@ class InAppVolume:
                     name = (el.CurrentName or "").lower()
                 except Exception:
                     continue
-                # "Change volume" in Spotify, "Volume" in a web player. Matching
-                # on the word rather than a fixed string means an app we have
-                # never seen works without being added to a list.
                 if "volume" not in name:
                     continue
                 try:
                     rv = el.GetCurrentPattern(mod.UIA_RangeValuePatternId)
                     rv = rv.QueryInterface(mod.IUIAutomationRangeValuePattern)
-                    rv.CurrentValue                  # prove it answers
+                    rv.CurrentValue
                     return rv
                 except Exception:
                     continue
@@ -190,13 +165,12 @@ class InAppVolume:
                 if rv is not None:
                     return rv
                 if time.time() - self._tried.get(procname, 0) < RETRY_S:
-                    return None            # no slider, and we looked recently
+                    return None
             rv = self._find(procname)
             self._cache[procname] = rv
             self._tried[procname] = time.time()
             return rv
 
-    # -- the interface the mixer uses -------------------------------------
     def available(self, procname):
         return self._pattern(procname) is not None
 
@@ -215,16 +189,12 @@ class InAppVolume:
             with self._lock:
                 if key in self._want:
                     return self._want[key]
-        for force in (False, True):        # a stale element gets one re-find
+        for force in (False, True):
             rv = self._pattern(procname, force)
             if rv is None:
                 return None
             try:
                 v = int(round(rv.CurrentValue * 100))
-                # SEED only, never overwrite. _want is what we last ASKED for,
-                # and the app reports its own value a beat late - letting a read
-                # write over our intention made every detent set the same number
-                # again, so the knob turned and nothing moved.
                 with self._lock:
                     self._want.setdefault(key, v)
                 return v
@@ -261,8 +231,6 @@ class InAppVolume:
         theirs instead.
         """
         key = (procname or "").lower()
-        # A real read here, once per turn of the knob: this is the moment it is
-        # worth knowing whether somebody moved the slider by hand.
         cur = self.get(procname, live=True)
         if cur is None:
             return None

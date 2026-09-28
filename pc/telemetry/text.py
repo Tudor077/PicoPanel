@@ -14,7 +14,6 @@ an empty string rather than treat it as "nothing there".
 import re
 import unicodedata
 
-# ';' and '=' are the wire protocol's separators and can never be let through.
 UNSAFE = re.compile(r"[^A-Za-z0-9 .,_/+()\[\]:!?&'-]")
 
 _CYRILLIC = {
@@ -25,14 +24,11 @@ _CYRILLIC = {
     "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch",
     "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "",
     "э": "e", "ю": "yu", "я": "ya",
-    # Ukrainian, Belarusian, Serbian, Macedonian
     "і": "i", "ї": "yi", "є": "ye", "ґ": "g", "ў": "u",
     "ђ": "dj", "ј": "j", "љ": "lj", "њ": "nj",
     "ћ": "c", "џ": "dz", "ѓ": "g", "ќ": "k",
 }
 
-# Letters decomposition leaves alone, because the mark is part of the letter
-# rather than something sitting on top of it.
 _SPECIAL = {"ß": "ss", "æ": "ae", "ø": "o", "å": "a", "œ": "oe",
             "đ": "d", "ł": "l", "þ": "th", "ð": "d", "ı": "i"}
 
@@ -42,7 +38,7 @@ def translit(s):
     out = []
     for ch in unicodedata.normalize("NFKD", str(s or "")):
         if unicodedata.combining(ch):
-            continue                        # the accent off an already-split e
+            continue
         low = ch.lower()
         rep = _CYRILLIC.get(low)
         if rep is None:
@@ -54,7 +50,7 @@ def translit(s):
         elif len(rep) == 1:
             out.append(rep.upper())
         else:
-            out.append(rep.capitalize())    # Zh mid-title, not ZH
+            out.append(rep.capitalize())
     return "".join(out)
 
 

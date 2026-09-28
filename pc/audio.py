@@ -40,14 +40,12 @@ except Exception:                                   # pragma: no cover
     HAVE_TITLES = False
 
 
-# Browsers get the YouTube treatment; everything else is named after itself.
 BROWSERS = {
     "opera.exe": "Opera", "opera_gx.exe": "OperaGX", "chrome.exe": "Chrome",
     "msedge.exe": "Edge", "firefox.exe": "Firefox", "brave.exe": "Brave",
     "vivaldi.exe": "Vivaldi", "zen.exe": "Zen", "librewolf.exe": "LibreWolf",
 }
 
-# A few processes whose own name is not what you'd call them.
 PRETTY = {
     "spotify.exe": "Spotify", "discord.exe": "Discord", "steam.exe": "Steam",
     "vlc.exe": "VLC", "aimp.exe": "AIMP", "foobar2000.exe": "foobar",
@@ -57,16 +55,11 @@ PRETTY = {
     "cs2.exe": "CS2", "steamwebhelper.exe": "Steam",
 }
 
-# Channels that exist but are not things anyone wants to turn down: Windows'
-# own plumbing. Leaving them in would push the apps you care about further
-# along the list for no reason.
 SKIP = {"svchost.exe", "audiodg.exe", "system", "sihost.exe",
         "textinputhost.exe", "applicationframehost.exe"}
 
-MAX_NAME = 10               # what fits on the panel next to a percentage
+MAX_NAME = 10
 
-# Enumerating the mixer costs a few milliseconds of COM calls. The knob asks
-# far more often than apps appear and disappear, so we keep the answer briefly.
 CACHE_S = 1.0
 
 
@@ -111,9 +104,9 @@ class Target:
     """One thing the knob can point at: the whole system, or one app."""
 
     def __init__(self, key, label, procname=None):
-        self.key = key              # "system", or the lower-case process name
-        self.label = label          # what the panel shows
-        self.procname = procname    # None for the system target
+        self.key = key
+        self.label = label
+        self.procname = procname
 
     def __repr__(self):
         return "Target(%s, %r)" % (self.key, self.label)
@@ -132,9 +125,6 @@ class Mixer:
         self._when = 0.0
         self._com_ready = set()
         self.error = "" if HAVE_AUDIO else "pycaw is missing"
-        # The app's OWN slider comes first wherever there is one - that is the
-        # one you can see moving. The mixer channel is the fallback for
-        # everything that doesn't publish one.
         try:
             import appvolume
             self.inapp = appvolume.InAppVolume()
@@ -142,7 +132,6 @@ class Mixer:
             self.inapp = None
         self._inapp_saved = self.inapp
 
-    # -- COM housekeeping -------------------------------------------------
     def _com(self):
         me = threading.get_ident()
         if me not in self._com_ready:
@@ -152,14 +141,13 @@ class Mixer:
                 pass
             self._com_ready.add(me)
 
-    # -- enumeration ------------------------------------------------------
     def _sessions(self):
         """[(process name lower, ISimpleAudioVolume)] for everything playing."""
         out = []
         try:
             for s in AudioUtilities.GetAllSessions():
                 if not s.Process:
-                    continue                    # system sounds: no app to name
+                    continue
                 try:
                     name = s.Process.name().lower()
                 except Exception:
@@ -183,9 +171,6 @@ class Mixer:
             for name, _vol in self._sessions():
                 if name not in names and name not in SKIP:
                     names.append(name)
-            # Sorted, so the order doesn't reshuffle every time the mixer is
-            # read. The panel still tracks its target by NAME - see index_of -
-            # because an app closing does move everything after it.
             names.sort()
 
             titles = _browser_titles()
@@ -193,7 +178,6 @@ class Mixer:
             for name in names:
                 label = _pretty(name)
                 if name in BROWSERS:
-                    # Only claim "YouTube" when the browser itself says so.
                     for t in titles.get(name, []):
                         if "youtube" in t.lower():
                             label = "YouTube"
@@ -228,7 +212,6 @@ class Mixer:
         except Exception:
             return "mix"
 
-    # -- reading and writing ---------------------------------------------
     def _endpoint(self):
         """The master volume of the default output.
 
@@ -255,12 +238,7 @@ class Mixer:
                 ep = self._endpoint()
                 return (int(round(ep.GetMasterVolumeLevelScalar() * 100)),
                         bool(ep.GetMute()))
-            # The app's own slider first. Mute has no equivalent there, so it
-            # always comes from the channel - and muting the channel is better
-            # anyway: it is instant and it doesn't throw away the app's level.
             own = self.inapp.get(t.procname) if self.inapp else None
-            # An app can hold several channels (browsers always do). They are
-            # kept in step by every write here, so the first one speaks for all.
             for name, vol in self._sessions():
                 if name == t.procname:
                     return (own if own is not None
@@ -290,7 +268,7 @@ class Mixer:
             touched = False
             for name, vol in self._sessions():
                 if name == t.procname:
-                    vol.SetMasterVolume(v, None)    # every channel of that app
+                    vol.SetMasterVolume(v, None)
                     touched = True
             return pct if touched else None
         except Exception as e:
@@ -353,17 +331,8 @@ class Mixer:
         return None
 
 
-# ---------------------------------------------------------------------
-# The bridge to the panel
-# ---------------------------------------------------------------------
-
-# The codes the firmware sends. Kept in step with the enum in PicoPanel.ino.
 APP_UP, APP_DN, APP_PREV, APP_NEXT, APP_MUTE, APP_HOME = 1, 2, 3, 4, 5, 6
 
-# The panel treats the target as gone if it hears nothing for four seconds, and
-# falls back to the plain media keys. Twice a second keeps it confident and also
-# sets the pace at which a track change reaches the screen. It costs nothing
-# next to the telemetry stream.
 HEARTBEAT_S = 0.5
 
 _LINE_UNSAFE = str.maketrans("", "", ";=\r\n")
@@ -383,21 +352,14 @@ class AudioBridge:
     """
 
     def __init__(self, send, log=None, selected=None, on_select=None):
-        self.send = send                # send(str) -> writes a line to the board
+        self.send = send
         self.log = log or (lambda *_: None)
         self.mixer = Mixer()
-        # Replaced by the app with something that knows which page is up.
         self.wants = lambda: True
         self.volume_wants = lambda: True
         self.last_touch = 0.0
-        # None means "nobody has chosen yet", and that is not the same as
-        # Windows: until you pick one, the knob follows whatever is actually
-        # playing, so opening Spotify puts the knob on Spotify. The moment you
-        # press a button the choice becomes yours and is remembered.
         self.selected = selected
         self.on_select = on_select or (lambda _label: None)
-        # What's playing rides the same heartbeat: same thread, same link, and
-        # the panel's MUSIC page is never more than half a second behind.
         try:
             import nowplaying
             self.now = nowplaying.NowPlaying()
@@ -405,9 +367,6 @@ class AudioBridge:
         except Exception:
             self.now = None
             self._np_line = lambda _s: None
-        # The board's font is ASCII, so anything else is drawn HERE and sent as
-        # pixels. Only on a change: a rendered title is ~250 bytes and the
-        # heartbeat runs twice a second.
         try:
             import textstrip
             self._strip = textstrip.line
@@ -416,9 +375,7 @@ class AudioBridge:
             self._strip = lambda _k, _t: None
             self._strip_fields = lambda _t: None
         self._sent_strips = (None, None)
-        self.unicode_titles = True      # the app overrides this from settings
-        # Karaoke. Off until the app turns it on: it is the one thing here that
-        # leaves the machine.
+        self.unicode_titles = True
         try:
             import lyrics
             self.lyrics = lyrics.Lyrics(enabled=False)
@@ -431,7 +388,6 @@ class AudioBridge:
         self._stop = threading.Event()
         self._thread = None
 
-    # -- lifecycle --------------------------------------------------------
     def start(self):
         if self._thread:
             return
@@ -451,19 +407,14 @@ class AudioBridge:
 
     def request(self, code):
         """Called from the serial reader. Returns at once."""
-        # Touching the volume counts as looking at the music: the level is on
-        # screen for a few seconds afterwards, and so is what is playing.
         self.last_touch = time.time()
         self._q.put(int(code))
 
-    # -- the work ---------------------------------------------------------
     def _playing_index(self):
         """The mixer target of whatever is playing, if we can tell."""
         snap = self.now.snapshot() if self.now else None
         if not snap:
             return None
-        # A browser's media session is named after the browser's package, which
-        # looks nothing like its process. Its label is the way across.
         if snap.get("label") == "YouTube":
             i = self.mixer.index_of("YouTube")
             if i is not None:
@@ -529,8 +480,6 @@ class AudioBridge:
         """
         if not self.unicode_titles:
             if self._sent_strips != ("", ""):
-                # Turned off while a strip was on screen: clear it, or the board
-                # would keep drawing pixels the setting says it shouldn't.
                 self._sent_strips = ("", "")
                 self.send("%ts=1;w=0;d=")
                 self.send("%ts=2;w=0;d=")
@@ -545,7 +494,6 @@ class AudioBridge:
             if line:
                 self.send(line)
 
-    # 0 off, 1 words to show, 2 this track has none, 3 still asking.
     def _karaoke_state(self, snap):
         if not self.lyrics or not self.lyrics.enabled or not snap:
             return 0
@@ -568,7 +516,7 @@ class AudioBridge:
         lines = self.lyrics.get(snap.get("raw_artist"), snap.get("raw_title"),
                                 snap.get("dur"))
         if not lines:
-            return                       # still looking, or this track has none
+            return
         i = self._line_at(lines, float(snap.get("pos") or 0.0))
         key = (id(lines), i)
         if key == self._sent_lyric:
@@ -578,8 +526,6 @@ class AudioBridge:
         def strip(kind, at_s, text):
             body = self._strip_fields(text) if text else None
             if body is None:
-                # A blank line between verses still has to be sent, or the board
-                # would keep singing the last one through the instrumental.
                 body = "w=0;d="
             return "%%ky=%d;at=%d;%s" % (kind, int(at_s * 1000), body)
 
@@ -607,10 +553,8 @@ class AudioBridge:
             try:
                 code = self._q.get(timeout=HEARTBEAT_S)
             except queue.Empty:
-                code = None             # the heartbeat: just re-state where we are
+                code = None
             if code is not None:
-                # A fast spin queues up a pile of detents. Apply them all before
-                # reporting, or the panel's bar crawls a step behind the knob.
                 codes = [code]
                 while len(codes) < 32:
                     try:
@@ -625,10 +569,6 @@ class AudioBridge:
             want = self.wanted()
             if self.now:
                 self.now.want(want)
-            # The volume line costs 15 ms to build - a COM call per app in the
-            # mixer - and it is twice a second for ever. On a page that does
-            # not show it, once every three seconds is plenty: the board's own
-            # copy is only there so it can be drawn the moment you arrive.
             hot = True
             try:
                 hot = bool(self.volume_wants())
@@ -642,18 +582,11 @@ class AudioBridge:
                     snap = self.now.snapshot()
                     line = self._np_line(snap)
                     if line:
-                        # The karaoke state rides on this line, which goes out
-                        # every heartbeat. The strips themselves only go when
-                        # the words change - so through a long instrumental
-                        # nothing was sent at all, and the board timed the
-                        # words out and said karaoke was off over a song that
-                        # was playing perfectly well. Silence is not an answer;
-                        # this says so explicitly.
                         self.send(line + ";ka=%d" % self._karaoke_state(snap))
                     self._send_strips(snap)
                     self._send_lyrics(snap)
             except Exception:
-                pass                    # the board went away; not our problem
+                pass
 
 
 if __name__ == "__main__":

@@ -13,26 +13,24 @@ literals scattered about.
 from tkinter import ttk
 
 PAL = {
-    "bg":     "#151920",   # the window
-    "panel":  "#1b1e24",   # a frame inside it
-    "card":   "#20242c",   # a thing you can pick up
-    "field":  "#11151b",   # somewhere you type
-    "line":   "#2b3038",   # borders, separators
-    "ink":    "#e6e8ec",   # text
-    "dim":    "#8b93a1",   # text that is not the point
-    "faint":  "#6b7280",   # text that is barely the point
-    "accent": "#e8744f",   # the panel's own warm note - selection, focus
+    "bg":     "#151920",
+    "panel":  "#1b1e24",
+    "card":   "#20242c",
+    "field":  "#11151b",
+    "line":   "#2b3038",
+    "ink":    "#e6e8ec",
+    "dim":    "#8b93a1",
+    "faint":  "#6b7280",
+    "accent": "#e8744f",
     "ok":     "#5fd08a",
     "warn":   "#e0806a",
-    "screen": "#0a0c0e",   # the OLED, and anything standing in for it
+    "screen": "#0a0c0e",
 }
 
 
 def apply(root):
     """Dress the window and every ttk widget in it."""
     st = ttk.Style(root)
-    # clam is the only theme that lets you colour the borders and troughs;
-    # vista and xpnative draw themselves from Windows and ignore most of this.
     try:
         st.theme_use("clam")
     except Exception:
@@ -79,10 +77,6 @@ def apply(root):
                foreground=[("disabled", PAL["faint"])],
                arrowcolor=[("active", PAL["accent"])])
 
-    # clam's tick and dot are drawn with indicatorbackground (the box or disc)
-    # and indicatorforeground (the mark in it) - not "indicatorcolor", which is
-    # another theme's name for it and which clam quietly ignores. That is how
-    # they came out as white discs on a dark window.
     for kind in ("TCheckbutton", "TRadiobutton"):
         st.configure(kind, background=PAL["bg"], foreground=PAL["ink"],
                      indicatorbackground=PAL["field"],
@@ -113,8 +107,6 @@ def apply(root):
                  arrowcolor=PAL["dim"])
     st.configure("TSeparator", background=PAL["line"])
 
-    # A quieter label, for the paragraphs of explanation: they are worth
-    # having and they are not what you came to read.
     st.configure("Hint.TLabel", foreground=PAL["faint"], background=PAL["bg"])
     st.configure("Head.TLabel", foreground=PAL["ink"], background=PAL["bg"])
     return st
