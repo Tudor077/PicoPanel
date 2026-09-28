@@ -544,22 +544,12 @@ class App(tk.Tk):
                    command=lambda: self.link.send("y")).pack(side="left", padx=4)
 
         # ---- commands
-        right = ttk.LabelFrame(body, text="Commands")
-        right.pack(side="right", fill="y")
-        for text, ch in [("Rescan I2C", "i"), ("Bus test", "b"),
-                         ("Bus recovery", "k"), ("Re-init OLED", "x"),
-                         ("Screen visual test", "d"), ("I2C speed", "c"),
-                         ("Render period", "f"), ("Encoder status", "n"),
-                         ("Pin states", "p"), ("Reset counters", "r"),
-                         ("Reporting on/off", "s"), ("Help", "?")]:
-            ttk.Button(right, text=text, width=24,
-                       command=lambda c=ch: self.link.send(c)).pack(padx=6, pady=2)
-        ttk.Separator(right).pack(fill="x", pady=6)
-        self.entry = ttk.Entry(right, width=24)
-        self.entry.pack(padx=6, pady=2)
-        self.entry.bind("<Return>", self._send_entry)
-        ttk.Button(right, text="Send", width=24,
-                   command=self._send_entry).pack(padx=6, pady=2)
+        # There was a column of twelve diagnostic buttons here - rescan the
+        # bus, re-init the screen, pin states, help - and a box to type a
+        # command into. They are the board's own console, one letter each, and
+        # they belong to whoever is debugging the hardware rather than to
+        # anyone using the panel. The board still answers all of them over the
+        # wire; there is simply no longer a wall of buttons in front of them.
 
         self._build_settings()
 
@@ -2071,12 +2061,6 @@ class App(tk.Tk):
     def _set_connected(self, on):
         self.conn_btn.configure(text="Disconnect" if on else "Connect")
         self.status.configure(text="connected" if on else "disconnected")
-
-    def _send_entry(self, _evt=None):
-        text = self.entry.get().strip()
-        if text:
-            self.link.send(text)
-            self.entry.delete(0, "end")
 
     def _toggle_demo(self):
         if self.demo_var.get():
