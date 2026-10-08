@@ -71,7 +71,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: pocket-build-${{ github.run_number }}
-          name: PicoPanel Pocket build ${{ github.run_number }}
+          name: Pocket for Android - build ${{ github.run_number }}
           prerelease: true
           files: android/out/*.apk
           body: |
