@@ -1841,6 +1841,28 @@ class App(tk.Tk):
         self.link.disconnect()
         if self.tray:
             self.tray.stop()
+        # Fifteen different places schedule work with after(). Destroying the
+        # window without cancelling them leaves Tcl holding timers that point
+        # at commands which no longer exist, and it says so on the way out:
+        #   invalid command name "...._tick"  while executing ("after" script)
+        # Invisible in a windowed build, which has nowhere to say it - and a
+        # dying interpreter being driven by timers is the shape of the native
+        # crashes this program has been taking at shutdown.
+        #
+        # "after cancel" through Tcl rather than Tk's own after_cancel: that
+        # one also deletes the handler command, and the command can belong to
+        # a child widget whose own bookkeeping then still lists it - destroy()
+        # tries to delete it a second time and dies with "can't delete Tcl
+        # command". Stopping the timer is all that is wanted here; destroy()
+        # cleans up the commands itself, in the right order.
+        try:
+            for job in self.tk.splitlist(self.tk.call("after", "info")):
+                try:
+                    self.tk.call("after", "cancel", job)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self.destroy()
 
     def _refresh_ports(self):

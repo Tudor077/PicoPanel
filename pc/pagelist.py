@@ -116,6 +116,13 @@ class PageList(ttk.Frame):
         return self._blank
 
     def refill(self):
+        # Everything below is about to be destroyed, the card being dragged
+        # included. A drag that carries on past that positions a widget that no
+        # longer exists on the next mouse move - "bad window path name". Nine
+        # things in the app call refill(), and any of them landing mid-drag did
+        # it: 242 of them in a month of use, every one caught and written down
+        # and none of them fixed, because nobody had read the log.
+        self._drag = None
         for child in self.list.winfo_children():
             child.destroy()
         self._rows = {}
@@ -203,14 +210,19 @@ class PageList(ttk.Frame):
 
         side = tk.Frame(card, bg=CARD)
         side.pack(side="left", fill="both", expand=True, padx=6)
+        # anchor="w" on the label itself, not only on pack(). Six buttons take
+        # their room before this column does, and a Label narrower than its own
+        # text centres that text and cuts BOTH ends: "yours - double-click"
+        # came out as "s - double". Anchored west it is cut on the right only,
+        # the way every list in Windows does it.
         tk.Label(side, text=name, bg=CARD, fg=theme.PAL["ink"] if inside else DIM,
-                 font=("", 10, "bold")).pack(anchor="w")
-        if self.app.slot_of(pg) is not None:
-            tk.Label(side, text="yours - double-click", bg=CARD,
-                     fg=DIM, font=("", 8)).pack(anchor="w")
+                 font=("", 10, "bold"), anchor="w").pack(anchor="w", fill="x")
+        # "double-click to lay it out" is already written above the list, and
+        # on a card this narrow it was costing more than it said.
         if (pg, 0) not in self.shots:
-            tk.Label(side, text="no picture yet", bg=CARD,
-                     fg=theme.PAL["faint"], font=("", 8)).pack(anchor="w")
+            tk.Label(side, text="no picture yet", bg=CARD, anchor="w",
+                     fg=theme.PAL["faint"], font=("", 8)).pack(anchor="w",
+                                                               fill="x")
 
         def tool(text, cmd, fg="#e6e8ec", width=2):
             b = tk.Button(btn, text=text, width=width, bd=0,
@@ -289,7 +301,10 @@ class PageList(ttk.Frame):
 
     def _haul(self, ev):
         d = self._drag
-        if not d:
+        # Belt as well as braces: refill() drops the drag, but a motion event
+        # already queued when the list was rebuilt would still arrive here.
+        if not d or not d["card"].winfo_exists():
+            self._drag = None
             return
         y = ev.y_root - self.list.winfo_rooty()
         d["card"].place_configure(y=int(y - d["hold"]))
@@ -306,8 +321,15 @@ class PageList(ttk.Frame):
         d, self._drag = self._drag, None
         if not d:
             return
-        d["gap"].destroy()
-        d["card"].place_forget()
+        try:
+            d["gap"].destroy()
+            d["card"].place_forget()
+        except tk.TclError:
+            # The list was rebuilt while the button was down. The order this
+            # drag was aiming at describes a layout that no longer exists, so
+            # the honest thing is to drop it rather than apply it to whatever
+            # is there now.
+            return
         order = self.app._pg_ids[0]
         order.remove(d["pg"])
         order.insert(min(d["index"], len(order)), d["pg"])
