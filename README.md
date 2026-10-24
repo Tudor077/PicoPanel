@@ -107,6 +107,12 @@ CorsaConnect** and CorsaConnect keeps the port and sends a copy on 5051 -
 which arrives better than the raw packet, with the learned redline, the slide
 and the crash impact already folded in.
 
+**No firewall prompt.** The UDP listeners bind to `127.0.0.1`, which Windows
+never filters, so a sim on the same PC needs no rule and no admin rights. If
+the telemetry comes from another machine instead, start the app with
+`PICOPANEL_BIND=0.0.0.0` - that path really does cross the firewall, so Windows
+asks once.
+
 ## Building the firmware
 
 Arduino IDE, with:

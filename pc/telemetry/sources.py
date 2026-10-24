@@ -8,6 +8,7 @@ switch when you change games.
 import http.client
 import json
 import math
+import os
 import socket
 import struct
 import threading
@@ -17,6 +18,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .model import Telemetry
+
+BIND_HOST = os.environ.get("PICOPANEL_BIND", "127.0.0.1")
 
 
 class RevRange:
@@ -244,10 +247,11 @@ class OutGaugeSource(Source):
     _FMT = "<I4sHBBfffffffIIfff16s16s"
     _SIZE = struct.calcsize(_FMT)
 
-    def __init__(self, port=4444, label="BeamNG"):
+    def __init__(self, port=4444, label="BeamNG", bind=BIND_HOST):
         super().__init__()
         self.port = port
         self.label = label
+        self.bind = bind
 
     @classmethod
     def decode(cls, data):
@@ -281,11 +285,11 @@ class OutGaugeSource(Source):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(0.5)
-            sock.bind(("0.0.0.0", self.port))
+            sock.bind((self.bind, self.port))
         except OSError as e:
             self.status = f"can't listen on {self.port}: {e}"
             return
-        self.status = f"listening on UDP {self.port}"
+        self.status = f"listening on UDP {self.bind}:{self.port}"
         revs = RevRange()
         learned = False
         while not self._stop.is_set():
@@ -611,9 +615,10 @@ class CorsaSource(Source):
     _SIZE = struct.calcsize(_FMT)
     _VERSION = 7
 
-    def __init__(self, port=5051):
+    def __init__(self, port=5051, bind=BIND_HOST):
         super().__init__()
         self.port = port
+        self.bind = bind
 
     @classmethod
     def decode(cls, data):
@@ -651,11 +656,11 @@ class CorsaSource(Source):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(0.5)
-            sock.bind(("0.0.0.0", self.port))
+            sock.bind((self.bind, self.port))
         except OSError as e:
             self.status = "can't listen on %d: %s" % (self.port, e)
             return
-        self.status = "waiting for the mirror on UDP %d" % self.port
+        self.status = "waiting for the mirror on UDP %s:%d" % (self.bind, self.port)
         seen = False
         while not self._stop.is_set():
             try:

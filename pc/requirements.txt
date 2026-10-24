@@ -1,0 +1,21 @@
+# What the desktop app and its build need. Install with:
+#
+#     pip install -r requirements.txt
+#
+# Only pyserial is required to actually talk to the panel; the rest add
+# features that each degrade gracefully if missing (see the try/except around
+# every one of these imports in the code). PyInstaller is here so `build.py`
+# can pack everything into a single PicoPanel.exe.
+pyserial            # the serial link to the board - the one hard requirement
+pywin32             # tray icon, autostart shortcut, window/volume helpers
+Pillow              # the tray icon drawing and the title pixel strips
+pycaw               # per-application volume through the Windows mixer
+comtypes            # COM glue pycaw and the UI Automation slider ride on
+psutil              # maps audio sessions back to the app that owns them
+pyinstaller         # packs the app into one .exe (build.py)
+
+# "Now playing" reads the Windows media sessions through the WinRT projection.
+# It's optional and guarded, so leave it out on a machine where it won't
+# install; the app simply won't show the current track there.
+winrt-Windows.Media.Control; platform_system == "Windows"
+winrt-Windows.Foundation; platform_system == "Windows"
