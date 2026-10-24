@@ -432,7 +432,7 @@ class App(tk.Tk):
         st = ttk.LabelFrame(left, text="Panel state")
         st.pack(fill="both", expand=True, pady=(6, 0))
         self.lamps_pcf = self._lamp_row(st, "Buttons A / B", PCF_BTN)
-        self.lamps_btn = self._lamp_row(st, "D-pad (not fitted)", PANEL_BTN)
+        self.lamps_btn = self._lamp_row(st, "D-pad", PANEL_BTN)
 
         sw = ttk.Frame(st)
         sw.pack(fill="x", pady=6)
@@ -605,14 +605,9 @@ class App(tk.Tk):
         ttk.Separator(scr).pack(fill="x", padx=8, pady=8)
         ttk.Label(scr, text="I2C speed").pack(anchor="w", padx=8)
         ttk.Label(scr, wraplength=330, justify="left", style="Hint.TLabel",
-                  text="There is no vsync on these modules - they bring out SDA "
-                       "and SCL and nothing else. What you can do is spend less "
-                       "time writing the frame, because the tear is the panel "
-                       "showing a buffer that is half old and half new. Measured "
-                       "on this board: 18.1 ms a frame at 400 kHz, 9.0 ms at 1 "
-                       "MHz. 1 MHz is past what the SSD1306 promises - if yours "
-                       "dislikes it you get rubbish on screen and you come back "
-                       "here.").pack(anchor="w", padx=8, pady=(2, 4))
+                  text="Higher draws the screen faster and tears less. If "
+                       "the panel shows garbage at 1000, go back to 400."
+                  ).pack(anchor="w", padx=8, pady=(2, 4))
         self.i2c_var = tk.IntVar(value=int(self.cfg.get("i2c_khz", 400)))
         row = ttk.Frame(scr)
         row.pack(anchor="w", padx=20)
@@ -624,13 +619,8 @@ class App(tk.Tk):
         hl = ttk.LabelFrame(rest, text="Pages that hold HID")
         hl.pack(fill="x", pady=(10, 0))
         ttk.Label(hl, wraplength=320, justify="left", style="Hint.TLabel",
-                  text="The GAME page has always done this: with the gamepad "
-                       "armed, the USER button walks the game's own sub-pages "
-                       "and will not leave, and you disarm to get out. Mark any "
-                       "page the same way with its HID chip in the list - a "
-                       "press mid-corner should not cost you the page you were "
-                       "reading. Disarming is the only way out, on purpose: a "
-                       "second way out is a way to leave by accident."
+                  text="With HID armed, USER won't step off a page you "
+                       "marked with its HID chip. Disarm to move on."
                   ).pack(anchor="w", padx=8, pady=(4, 2))
         self.hid_lock_lbl = ttk.Label(hl, wraplength=320, justify="left",
                                       style="Hint.TLabel")
@@ -673,10 +663,9 @@ class App(tk.Tk):
         al = ttk.LabelFrame(rest, text="Alarms")
         al.pack(fill="x", pady=(10, 0))
         ttk.Label(al, wraplength=320, justify="left", style="Hint.TLabel",
-                  text="The screen flashes and says so, whatever page is up - "
-                       "so it is not a widget on a page you might not be "
-                       "looking at. The app keeps the time; the board owns "
-                       "the glass.").pack(anchor="w", padx=8, pady=(4, 2))
+                  text="The whole screen flashes, whatever page is up. The "
+                       "panel rings them itself, even with this app closed."
+                  ).pack(anchor="w", padx=8, pady=(4, 2))
         self.al_box = tk.Listbox(al, height=4, activestyle="none",
                                  **theme.text_opts(caret=False))
         self.al_box.pack(fill="x", padx=8)
